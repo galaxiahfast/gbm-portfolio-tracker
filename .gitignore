@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Datos privados y persistentes: nunca deben entrar al historial de Git.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Credenciales y configuración local.
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Archivos temporales, respaldos y empaquetados locales.
+tmp/
+backups/
+*.bak
+*.zip
