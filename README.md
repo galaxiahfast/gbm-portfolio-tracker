@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Portafolio GBM+
 
 Aplicación local para controlar efectivo MXN/USD, operaciones de acciones de Estados Unidos/SIC, comprobantes de GBM+, posiciones FIFO, rendimiento y auditoría. Al iniciar por primera vez registra automáticamente el capital inicial solicitado de **921.05 USD**, una sola vez.
@@ -174,3 +175,7 @@ La sección **Auditoría** comprueba:
 - imágenes huérfanas, vínculos duplicados y operaciones sin imagen.
 
 Cierra la aplicación y copia la carpeta `data/`. La base y los comprobantes deben respaldarse juntos. No compartas esa carpeta si contiene información personal.
+=======
+# gbm-portfolio-tracker
+Aplicación web interactiva en Python para el control de portafolio en GBM+ (SIC/EUA) con gestión de divisas MXN/USD, lectura de comprobantes por OCR, contabilidad FIFO y arquitectura modular extensible para análisis predictivo.
+>>>>>>> 645f87fee3acf07841638bf52fcc83f2b4fb0d7d
