@@ -30,15 +30,37 @@ def test_plotly_projection_contains_15_sequential_business_days() -> None:
     figure = build_15_day_projection_figure(
         tuple(reversed(analysis.daily_projection)),
         analysis.last_price,
+        analysis.daily_indicators,
     )
 
     expected_dates = tuple(item.session_date for item in analysis.daily_projection)
     assert figure.layout.xaxis.type == "date"
-    assert all(tuple(trace.x) == expected_dates for trace in figure.data)
-    central = next(trace for trace in figure.data if trace.name == "Cierre esperado")
-    assert len(central.y) == PROJECTION_DAYS
-    assert all(value > 0 for value in central.y)
-    assert len(figure.layout.xaxis.ticktext) == PROJECTION_DAYS
+    history = next(trace for trace in figure.data if trace.name == "Histórico real · 30 sesiones")
+    candles = next(trace for trace in figure.data if trace.name == "Velas proyectadas")
+    assert len(history.close) == 30
+    assert tuple(candles.x) == expected_dates
+    assert len(candles.close) == PROJECTION_DAYS
+    assert all(value > 0 for value in candles.open)
+    assert all(low <= min(open_, close) for low, open_, close in zip(candles.low, candles.open, candles.close))
+    assert all(high >= max(open_, close) for high, open_, close in zip(candles.high, candles.open, candles.close))
+    assert len(figure.data) == 2
+    assert figure.layout.shapes
+
+
+def test_projection_rejects_incoherent_or_short_history() -> None:
+    analysis = _analysis()
+    short_history = analysis.daily_indicators.tail(29)
+
+    try:
+        build_15_day_projection_figure(
+            analysis.daily_projection,
+            analysis.last_price,
+            short_history,
+        )
+    except ValueError as exc:
+        assert "30 sesiones" in str(exc)
+    else:
+        raise AssertionError("Se aceptó un histórico menor a 30 sesiones")
 
 
 def test_reportlab_projection_drawing_is_positive_and_compact() -> None:

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-LAST_VERIFIED_TESTS = 66
-LAST_VERIFIED_DATE = "2026-08-28"
+LAST_VERIFIED_TESTS = 77
+LAST_VERIFIED_DATE = "2026-08-29"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,10 +37,11 @@ MILESTONES = (
     ImplementationMilestone("Motor multi-temporal Fase 4", "Señales 5m, contexto diario/semanal y veto de riesgo.", "complete", 1.5),
     ImplementationMilestone("Proyección bootstrap de 15 sesiones", "Volatilidad histórica, ATR y reacción a estructura real.", "complete", 1.0),
     ImplementationMilestone("PDF técnico con todos los paneles", "Intradiario, contexto y estructura mensual sin omisiones.", "complete", 1.5),
-    ImplementationMilestone("Tres reportes independientes", "Vista ejecutiva, técnica y reporte unificado.", "complete", 0.5),
+    ImplementationMilestone("Cuatro reportes independientes", "Vista ejecutiva, técnica, reporte combinado y maestro con calibración.", "complete", 0.5),
     ImplementationMilestone("Detector de patrones chartistas y ondas", "Pivotes Zig-Zag, dobles/triples extremos, rupturas y estructuras impulso/ABC con veto objetivo.", "complete", 1.0),
-    ImplementationMilestone("Análisis fundamental y noticias", "Estados financieros, eventos y contexto informativo versionado.", "planned", 1.0),
-    ImplementationMilestone("Calibración estadística y backtesting", "Separación cronológica OOS, ATR, costes, error Brier, veto de capital y huella auditable.", "complete", 1.5),
+    ImplementationMilestone("Análisis fundamental y noticias", "Estados financieros, eventos, flujo informativo versionado, ponderación direccional y veto SHA-256.", "complete", 1.0),
+    ImplementationMilestone("Calibración estadística y backtesting", "Búsqueda anidada de parámetros, OOS intacto, ATR, costes, error Brier, veto de capital y huella auditable.", "complete", 1.5),
+    ImplementationMilestone("Realimentación progresiva intradía", "Observaciones únicas cada cinco minutos, resolución a una sesión, umbral adaptativo y SHA-256.", "complete", 1.0),
 )
 
 

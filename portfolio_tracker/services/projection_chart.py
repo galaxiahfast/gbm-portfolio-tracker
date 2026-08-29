@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING
 
 from reportlab.graphics.shapes import Circle, Drawing, Line, Polygon, PolyLine, String
@@ -66,93 +67,114 @@ def ordered_daily_projection(
 def build_15_day_projection_figure(
     points: Sequence["DailyProjectionPoint"],
     current_price: float,
+    historical_daily=None,
 ) -> "Figure":
-    """Crea una serie Plotly diaria con cierre esperado y envolvente ATR."""
+    """Une 30 sesiones OHLC reales con 15 velas estadísticas futuras."""
 
     import plotly.graph_objects as go
+    import pandas as pd
 
     ordered = ordered_daily_projection(points)
-    dates = [item.session_date for item in ordered]
+    projection_dates = [item.session_date for item in ordered]
     expected = [item.expected_close for item in ordered]
     floors = [item.daily_floor for item in ordered]
     ceilings = [item.daily_ceiling for item in ordered]
-    tick_labels = [f"Día {item.day_number}<br>{item.session_date:%d/%m}" for item in ordered]
+    opens = [current_price, *expected[:-1]]
+    highs = [
+        max(open_price, close_price, ceiling)
+        for open_price, close_price, ceiling in zip(opens, expected, ceilings)
+    ]
+    lows = [
+        min(open_price, close_price, floor)
+        for open_price, close_price, floor in zip(opens, expected, floors)
+    ]
+    if historical_daily is None or historical_daily.empty:
+        raise ValueError("Se requieren velas históricas para enlazar la proyección.")
+    required = ("Open", "High", "Low", "Close")
+    missing = [column for column in required if column not in historical_daily.columns]
+    if missing:
+        raise ValueError("Faltan columnas históricas OHLC: " + ", ".join(missing) + ".")
+    history = historical_daily.loc[:, list(required)].copy()
+    if not isinstance(history.index, pd.DatetimeIndex):
+        history.index = pd.to_datetime(history.index)
+    history = history[~history.index.duplicated(keep="last")].sort_index()
+    for column in required:
+        history[column] = pd.to_numeric(history[column], errors="coerce")
+    history = history.dropna().tail(30)
+    if len(history) != 30:
+        raise ValueError("Se requieren exactamente 30 sesiones históricas utilizables.")
+    invalid = (
+        (history[["Open", "High", "Low", "Close"]] <= 0).any(axis=1)
+        | (history["High"] < history[["Open", "Close", "Low"]].max(axis=1))
+        | (history["Low"] > history[["Open", "Close", "High"]].min(axis=1))
+    )
+    if invalid.any():
+        raise ValueError("El histórico contiene velas OHLC matemáticamente inválidas.")
+    history_dates = list(history.index)
+    if pd.Timestamp(history_dates[-1]).date() >= projection_dates[0]:
+        raise ValueError("La proyección debe comenzar después del último dato histórico.")
 
     figure = go.Figure()
     figure.add_trace(
-        go.Scatter(
-            x=dates,
-            y=floors,
-            mode="lines",
-            line={"width": 0},
-            hoverinfo="skip",
-            showlegend=False,
-            name="Piso diario",
+        go.Candlestick(
+            x=history_dates,
+            open=history["Open"],
+            high=history["High"],
+            low=history["Low"],
+            close=history["Close"],
+            increasing={"line": {"color": "#10B981"}, "fillcolor": "#10B981"},
+            decreasing={"line": {"color": "#F43F5E"}, "fillcolor": "#F43F5E"},
+            name="Histórico real · 30 sesiones",
+            hovertext=["Sesión observada"] * len(history),
         )
     )
     figure.add_trace(
-        go.Scatter(
-            x=dates,
-            y=ceilings,
-            mode="lines",
-            line={"color": "rgba(59, 130, 246, 0.35)", "width": 1},
-            fill="tonexty",
-            fillcolor="rgba(59, 130, 246, 0.14)",
-            name="Rango diario ATR",
-            customdata=[[item.day_number, item.daily_floor] for item in ordered],
-            hovertemplate=(
-                "Día %{customdata[0]} · %{x|%d/%m/%Y}<br>"
-                "Piso: $%{customdata[1]:.2f}<br>Techo: $%{y:.2f}<extra></extra>"
-            ),
-        )
-    )
-    figure.add_trace(
-        go.Scatter(
-            x=dates,
-            y=[current_price] * PROJECTION_DAYS,
-            mode="lines",
-            line={"color": "#94A3B8", "width": 1.5, "dash": "dot"},
-            name="Precio actual",
-            hovertemplate="Referencia actual: $%{y:.2f}<extra></extra>",
-        )
-    )
-    figure.add_trace(
-        go.Scatter(
-            x=dates,
-            y=expected,
-            mode="lines+markers",
-            line={"color": "#60A5FA", "width": 4, "shape": "spline", "smoothing": 0.35},
-            marker={"size": 7, "line": {"color": "#DBEAFE", "width": 1.5}},
-            name="Cierre esperado",
+        go.Candlestick(
+            x=projection_dates,
+            open=opens,
+            high=highs,
+            low=lows,
+            close=expected,
+            increasing={"line": {"color": "#22C55E"}, "fillcolor": "#22C55E"},
+            decreasing={"line": {"color": "#EF4444"}, "fillcolor": "#EF4444"},
+            name="Velas proyectadas",
             customdata=[item.day_number for item in ordered],
-            hovertemplate=(
-                "Día %{customdata} · %{x|%d/%m/%Y}<br>"
-                "Cierre esperado: $%{y:.2f}<extra></extra>"
-            ),
+            hovertext=[
+                f"Día {item.day_number} · escenario estadístico"
+                for item in ordered
+            ],
         )
     )
+    boundary = datetime.combine(projection_dates[0], time.min) - timedelta(hours=12)
     figure.update_layout(
-        height=360,
+        height=430,
         margin={"l": 20, "r": 20, "t": 16, "b": 22},
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
         xaxis={
             "title": None,
             "type": "date",
-            "tickmode": "array",
-            "tickvals": dates,
-            "ticktext": tick_labels,
-            "tickangle": 0,
+            "tickformat": "%d/%m",
+            "dtick": "D5",
             "rangebreaks": [{"bounds": ["sat", "mon"]}],
             "showgrid": False,
+            "rangeslider": {"visible": False},
         },
         yaxis={
-            "title": "Precio proyectado (USD)",
+            "title": "Precio histórico y proyectado (USD)",
             "tickprefix": "$",
             "tickformat": ",.2f",
             "gridcolor": "rgba(148, 163, 184, 0.18)",
             "zeroline": False,
         },
+    )
+    figure.add_vline(
+        x=boundary,
+        line_width=1.5,
+        line_dash="dash",
+        line_color="#F59E0B",
+        annotation_text="Inicio de proyección",
+        annotation_position="top right",
     )
     return figure
 

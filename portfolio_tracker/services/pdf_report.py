@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO
+import json
 from typing import TYPE_CHECKING
 
 from reportlab.lib import colors
@@ -171,6 +174,28 @@ def _report_header(analysis: "ProbabilityAnalysis", title: str, styles) -> list[
     ]
 
 
+def _fundamental_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  # type: ignore[no-untyped-def]
+    reasons = " | ".join(_safe_text(item) for item in analysis.fundamental_reasons[:6])
+    return [
+        Paragraph("Contexto fundamental y noticias", styles["Section"]),
+        _table(
+            [
+                ["Lectura", "Impacto", "Veto", "Corte SHA-256"],
+                [
+                    _safe_text(analysis.fundamental_label),
+                    f"{analysis.fundamental_score:+.1f} pp",
+                    "ACTIVO" if analysis.fundamental_risk_veto else "INACTIVO",
+                    analysis.fundamental_snapshot_sha256[:16] + "…"
+                    if analysis.fundamental_snapshot_sha256 else "Sin corte",
+                ],
+            ],
+            [43.5 * mm] * 4,
+        ),
+        Spacer(1, 5),
+        Paragraph(reasons or "Fuente no disponible; ponderación neutral.", styles["BodySmall"]),
+    ]
+
+
 def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  # type: ignore[no-untyped-def]
     story: list[object] = []
 
@@ -187,6 +212,7 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
         [f"${analysis.last_price:,.2f}", f"${analysis.suggested_level:,.2f}", f"{analysis.probability_up:.1f}%", f"{analysis.probability_down:.1f}%", f"{analysis.operation_probability:.1f}%" if analysis.operation_probability else "Detonante pendiente"],
     ]
     story.extend([_table(summary_rows, [34.8 * mm] * 5), Spacer(1, 8), Paragraph(_safe_text(analysis.scenario), styles["BodySmall"])])
+    story.extend(_fundamental_story(analysis, styles))
     if analysis.neckline_heat_warning:
         story.extend(
             [
@@ -340,6 +366,8 @@ def _technical_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
         ["Tendencia semanal", analysis.weekly_trend.value],
         ["Tendencia mensual", analysis.monthly_trend.value],
         ["Veto de riesgo", "ACTIVO" if analysis.risk_veto else "INACTIVO"],
+        ["Fundamental/noticias", f"{analysis.fundamental_label} ({analysis.fundamental_score:+.1f} pp)"],
+        ["Veto fundamental", "ACTIVO" if analysis.fundamental_risk_veto else "INACTIVO"],
         ["Motivos", Paragraph(risk_reasons, styles["BodySmall"])],
     ]
     story.append(
@@ -460,11 +488,134 @@ def _technical_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
     return story
 
 
+def _json_mapping(value: object) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    try:
+        parsed = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
+def _calibration_story(
+    context: Mapping[str, object] | None,
+    styles,
+) -> list[object]:  # type: ignore[no-untyped-def]
+    story: list[object] = [
+        Paragraph("Calibración y backtesting", styles["Section"]),
+        Paragraph(
+            "Validación cronológica fuera de muestra. Los parámetros se seleccionan dentro "
+            "del entrenamiento y se congelan antes de evaluar el tramo OOS.",
+            styles["BodySmall"],
+        ),
+    ]
+    payload = dict(context or {})
+    online = _json_mapping(payload.get("online_stats", {}))
+    story.extend(
+        [
+            Spacer(1, 7),
+            Paragraph("Realimentación progresiva", styles["ChartTitle"]),
+            _table(
+                [
+                    ["Observaciones resueltas", "Acierto", "Error Brier", "Umbral adaptativo"],
+                    [
+                        int(online.get("resolved", 0) or 0),
+                        f"{float(online.get('accuracy', 0) or 0):.1%}",
+                        f"{float(online.get('brier_score', 0.25) or 0):.3f}",
+                        f"{float(online.get('adaptive_threshold', 0.55) or 0):.1%}",
+                    ],
+                ],
+                [43.5 * mm] * 4,
+            ),
+        ]
+    )
+    run = _json_mapping(payload.get("backtest_run", {}))
+    if not run:
+        story.extend(
+            [
+                Spacer(1, 8),
+                Paragraph(
+                    "Aún no existe una ejecución histórica registrada. El PDF maestro conserva "
+                    "esta ausencia explícita para evitar presentar métricas inventadas.",
+                    styles["BodySmall"],
+                ),
+            ]
+        )
+        return story
+
+    parameters = _json_mapping(run.get("parameters_json", {}))
+    result_payload = _json_mapping(run.get("payload_json", {}))
+    aggregate = _json_mapping(result_payload.get("aggregate", {}))
+    raw_payload = str(run.get("payload_json", ""))
+    stored_hash = str(run.get("payload_sha256", ""))
+    hash_valid = bool(raw_payload) and hashlib.sha256(raw_payload.encode("utf-8")).hexdigest() == stored_hash
+    story.extend(
+        [
+            Spacer(1, 9),
+            Paragraph("Último backtest registrado", styles["ChartTitle"]),
+            _table(
+                [
+                    ["ID", "Estado", "Motor", "Integridad SHA-256"],
+                    [
+                        run.get("id", "-"),
+                        _safe_text(run.get("status", "-")),
+                        _safe_text(run.get("engine_version", "-")),
+                        "VALIDA" if hash_valid else "ERROR",
+                    ],
+                ],
+                [43.5 * mm] * 4,
+            ),
+            Spacer(1, 7),
+            _table(
+                [
+                    ["Umbral", "Stop ATR", "Riesgo/op.", "Pruebas de rejilla"],
+                    [
+                        f"{float(parameters.get('minimum_probability', 0) or 0):.0%}",
+                        f"{float(parameters.get('stop_atr_multiple', 0) or 0):.2f}x",
+                        f"{float(parameters.get('risk_per_trade_pct', 0) or 0):.2f}%",
+                        int(parameters.get("optimization_trials", 0) or 0),
+                    ],
+                ],
+                [43.5 * mm] * 4,
+            ),
+            Spacer(1, 7),
+            _table(
+                [
+                    ["Trades OOS", "Acierto OOS", "Profit factor", "Drawdown máximo"],
+                    [
+                        int(aggregate.get("trades", 0) or 0),
+                        f"{float(aggregate.get('win_rate', 0) or 0):.1%}",
+                        (
+                            "Infinito"
+                            if aggregate.get("profit_factor") is None
+                            else f"{float(aggregate.get('profit_factor', 0) or 0):.2f}"
+                        ),
+                        f"{float(aggregate.get('maximum_drawdown_pct', 0) or 0):.2f}%",
+                    ],
+                ],
+                [43.5 * mm] * 4,
+            ),
+            Spacer(1, 7),
+            Paragraph(
+                _safe_text(
+                    f"Dataset SHA-256: {run.get('dataset_sha256', '-')}. "
+                    f"Resultado agregado: {result_payload.get('aggregate_decision', run.get('status', '-'))}."
+                ),
+                styles["BodySmall"],
+            ),
+        ]
+    )
+    return story
+
+
 def _build_report(
     analysis: "ProbabilityAnalysis",
     *,
     include_executive: bool,
     include_technical: bool,
+    include_calibration: bool = False,
+    calibration_context: Mapping[str, object] | None = None,
     title: str,
     subject: str,
 ) -> bytes:
@@ -478,6 +629,10 @@ def _build_report(
         if include_executive:
             story.append(PageBreak())
         story.extend(_technical_story(analysis, styles))
+    if include_calibration:
+        if include_executive or include_technical:
+            story.append(PageBreak())
+        story.extend(_calibration_story(calibration_context, styles))
     document.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
     return buffer.getvalue()
 
@@ -515,4 +670,21 @@ def build_probability_report(analysis: "ProbabilityAnalysis") -> bytes:
         include_technical=True,
         title="Reporte cuantitativo completo",
         subject="Resumen ejecutivo y tecnico para revision humana o por IA",
+    )
+
+
+def build_master_report(
+    analysis: "ProbabilityAnalysis",
+    calibration_context: Mapping[str, object] | None,
+) -> bytes:
+    """Genera las tres vistas: ejecutiva, técnica y calibración auditada."""
+
+    return _build_report(
+        analysis,
+        include_executive=True,
+        include_technical=True,
+        include_calibration=True,
+        calibration_context=calibration_context,
+        title="Reporte maestro cuantitativo",
+        subject="Vista ejecutiva, tecnica avanzada y calibracion fuera de muestra",
     )

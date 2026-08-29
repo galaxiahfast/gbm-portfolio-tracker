@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import sqlite3
@@ -499,6 +500,21 @@ class PortfolioRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def latest_backtest_run(self) -> dict[str, Any] | None:
+        """Devuelve el último resultado completo para el reporte maestro local."""
+
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, engine_version, symbols_json, parameters_json,
+                       dataset_sha256, payload_json, payload_sha256,
+                       status, created_at
+                FROM backtest_runs
+                ORDER BY created_at DESC, id DESC LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row else None
+
     def verify_backtest_runs(self) -> tuple[int, tuple[int, ...]]:
         with self.database.connect() as connection:
             rows = connection.execute(
@@ -512,3 +528,272 @@ class PortfolioRepository:
             if calculated != str(row["payload_sha256"]):
                 invalid.append(int(row["id"]))
         return len(rows) - len(invalid), tuple(invalid)
+
+    def latest_backtest_parameters(self) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT parameters_json FROM backtest_runs
+                ORDER BY created_at DESC, id DESC LIMIT 1
+                """
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            payload = json.loads(str(row["parameters_json"]))
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _live_observation_payload(
+        *,
+        symbol: str,
+        observed_at: str,
+        horizon_minutes: int,
+        reference_price: str,
+        raw_probability_up: str,
+        predicted_direction: str,
+        parameters_json: str,
+    ) -> str:
+        return json.dumps(
+            {
+                "symbol": symbol,
+                "observed_at": observed_at,
+                "horizon_minutes": horizon_minutes,
+                "reference_price": reference_price,
+                "raw_probability_up": raw_probability_up,
+                "predicted_direction": predicted_direction,
+                "parameters_json": parameters_json,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def record_live_model_observation(
+        self,
+        *,
+        symbol: str,
+        observed_at: datetime,
+        reference_price: Decimal,
+        raw_probability_up: Decimal,
+        parameters_json: str,
+        horizon_minutes: int = 390,
+    ) -> bool:
+        normalized_symbol = symbol.strip().upper()
+        observed_text = observed_at.astimezone(timezone.utc).isoformat()
+        price_text = str(reference_price)
+        probability_text = str(raw_probability_up)
+        direction = "UP" if raw_probability_up >= Decimal("0.5") else "DOWN"
+        canonical = self._live_observation_payload(
+            symbol=normalized_symbol,
+            observed_at=observed_text,
+            horizon_minutes=horizon_minutes,
+            reference_price=price_text,
+            raw_probability_up=probability_text,
+            predicted_direction=direction,
+            parameters_json=parameters_json,
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO live_model_observations(
+                    symbol, observed_at, horizon_minutes, reference_price,
+                    raw_probability_up, predicted_direction, parameters_json,
+                    observation_sha256, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_symbol,
+                    observed_text,
+                    horizon_minutes,
+                    price_text,
+                    probability_text,
+                    direction,
+                    parameters_json,
+                    digest,
+                    _utc_now().isoformat(),
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def resolve_live_model_observations(
+        self,
+        *,
+        symbol: str,
+        current_price: Decimal,
+        current_as_of: datetime,
+    ) -> int:
+        normalized_symbol = symbol.strip().upper()
+        current_utc = current_as_of.astimezone(timezone.utc)
+        resolved = 0
+        with self.database.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM live_model_observations
+                WHERE symbol = ? AND resolved_at IS NULL
+                ORDER BY observed_at ASC
+                """,
+                (normalized_symbol,),
+            ).fetchall()
+            for row in rows:
+                observed = datetime.fromisoformat(str(row["observed_at"]))
+                horizon = timedelta(minutes=int(row["horizon_minutes"]))
+                if current_utc - observed < horizon:
+                    continue
+                reference = Decimal(str(row["reference_price"]))
+                outcome_up = current_price > reference
+                success = (
+                    outcome_up and row["predicted_direction"] == "UP"
+                ) or (
+                    not outcome_up and row["predicted_direction"] == "DOWN"
+                )
+                connection.execute(
+                    """
+                    UPDATE live_model_observations
+                    SET outcome_price = ?, outcome_up = ?, successful = ?, resolved_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(current_price),
+                        int(outcome_up),
+                        int(success),
+                        current_utc.isoformat(),
+                        int(row["id"]),
+                    ),
+                )
+                resolved += 1
+        return resolved
+
+    def live_model_stats(self, symbol: str, limit: int = 100) -> dict[str, float | int]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT raw_probability_up, outcome_up, successful
+                FROM live_model_observations
+                WHERE symbol = ? AND resolved_at IS NOT NULL
+                ORDER BY resolved_at DESC, id DESC LIMIT ?
+                """,
+                (symbol.strip().upper(), max(1, min(limit, 500))),
+            ).fetchall()
+        total = len(rows)
+        wins = sum(int(row["successful"] or 0) for row in rows)
+        accuracy = wins / total if total else 0.0
+        brier = (
+            sum(
+                (
+                    float(row["raw_probability_up"])
+                    - float(int(row["outcome_up"] or 0))
+                ) ** 2
+                for row in rows
+            ) / total
+            if total
+            else 0.25
+        )
+        learning_weight = min(total / 40, 1.0)
+        adaptive_threshold = 0.55 + max(
+            -0.03,
+            min(0.10, (0.55 - accuracy) * 0.20 * learning_weight),
+        )
+        return {
+            "resolved": total,
+            "wins": wins,
+            "accuracy": accuracy,
+            "brier_score": brier,
+            "adaptive_threshold": adaptive_threshold,
+        }
+
+    def verify_live_model_observations(self) -> tuple[int, tuple[int, ...]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM live_model_observations"
+            ).fetchall()
+        invalid: list[int] = []
+        for row in rows:
+            canonical = self._live_observation_payload(
+                symbol=str(row["symbol"]),
+                observed_at=str(row["observed_at"]),
+                horizon_minutes=int(row["horizon_minutes"]),
+                reference_price=str(row["reference_price"]),
+                raw_probability_up=str(row["raw_probability_up"]),
+                predicted_direction=str(row["predicted_direction"]),
+                parameters_json=str(row["parameters_json"]),
+            )
+            calculated = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            if calculated != str(row["observation_sha256"]):
+                invalid.append(int(row["id"]))
+        return len(rows) - len(invalid), tuple(invalid)
+
+    def record_fundamental_news_snapshot(
+        self,
+        *,
+        symbol: str,
+        observed_at: datetime,
+        provider: str,
+        engine_version: str,
+        payload_json: str,
+    ) -> tuple[int, str]:
+        """Versiona un corte inmutable; el JSON exacto es la unidad auditada."""
+
+        digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        normalized_symbol = symbol.strip().upper()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO fundamental_news_snapshots(
+                    symbol, observed_at, provider, engine_version,
+                    payload_json, payload_sha256, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_symbol,
+                    observed_at.astimezone(timezone.utc).isoformat(),
+                    provider,
+                    engine_version,
+                    payload_json,
+                    digest,
+                    _utc_now().isoformat(),
+                ),
+            )
+            row = connection.execute(
+                "SELECT id FROM fundamental_news_snapshots WHERE payload_sha256 = ?",
+                (digest,),
+            ).fetchone()
+        if not row:
+            raise RuntimeError("No fue posible versionar el corte fundamental.")
+        return int(row["id"]), digest
+
+    def latest_fundamental_news_snapshot(
+        self, symbol: str
+    ) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM fundamental_news_snapshots
+                WHERE symbol = ?
+                ORDER BY observed_at DESC, id DESC LIMIT 1
+                """,
+                (symbol.strip().upper(),),
+            ).fetchone()
+        if not row:
+            return None
+        payload = dict(row)
+        calculated = hashlib.sha256(
+            str(payload["payload_json"]).encode("utf-8")
+        ).hexdigest()
+        return payload if calculated == str(payload["payload_sha256"]) else None
+
+    def verify_fundamental_news_snapshots(self) -> tuple[int, tuple[int, ...]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, payload_json, payload_sha256 FROM fundamental_news_snapshots"
+            ).fetchall()
+        invalid = tuple(
+            int(row["id"])
+            for row in rows
+            if hashlib.sha256(str(row["payload_json"]).encode("utf-8")).hexdigest()
+            != str(row["payload_sha256"])
+        )
+        return len(rows) - len(invalid), invalid

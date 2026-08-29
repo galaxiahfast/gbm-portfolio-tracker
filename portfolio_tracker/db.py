@@ -157,6 +157,41 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
 
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_time
     ON backtest_runs(created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS live_model_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    horizon_minutes INTEGER NOT NULL,
+    reference_price TEXT NOT NULL,
+    raw_probability_up TEXT NOT NULL,
+    predicted_direction TEXT NOT NULL CHECK (predicted_direction IN ('UP', 'DOWN')),
+    parameters_json TEXT NOT NULL,
+    observation_sha256 TEXT NOT NULL,
+    outcome_price TEXT,
+    outcome_up INTEGER,
+    successful INTEGER,
+    resolved_at TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(symbol, observed_at, horizon_minutes)
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_model_symbol_time
+    ON live_model_observations(symbol, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS fundamental_news_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fundamental_news_symbol_time
+    ON fundamental_news_snapshots(symbol, observed_at DESC, id DESC);
 """
 
 MIGRATIONS: tuple[tuple[int, str], ...] = (
@@ -165,6 +200,8 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (3, "historial_auditorias"),
     (4, "comprobante_unico_por_operacion"),
     (5, "calibracion_estadistica_backtesting"),
+    (6, "realimentacion_progresiva_modelo"),
+    (7, "fundamentales_noticias_versionados"),
 )
 
 
@@ -247,6 +284,10 @@ class Database:
                             self._prevent_duplicate_receipt_links(connection)
                         elif version == 5:
                             self._create_backtest_history(connection)
+                        elif version == 6:
+                            self._create_live_model_history(connection)
+                        elif version == 7:
+                            self._create_fundamental_news_history(connection)
                     connection.execute(
                         """
                         INSERT INTO schema_migrations(version, name, applied_at)
@@ -264,6 +305,8 @@ class Database:
             self._create_audit_history(connection)
             self._prevent_duplicate_receipt_links(connection)
             self._create_backtest_history(connection)
+            self._create_live_model_history(connection)
+            self._create_fundamental_news_history(connection)
             connection.commit()
 
     def _backup_before_migrations(
@@ -322,7 +365,6 @@ class Database:
             ON audit_runs(created_at DESC)
             """
         )
-
     @staticmethod
     def _prevent_duplicate_receipt_links(connection: sqlite3.Connection) -> None:
         """Impide nuevas operaciones ligadas al mismo comprobante.
@@ -386,6 +428,60 @@ class Database:
             """
             CREATE INDEX IF NOT EXISTS idx_backtest_runs_time
             ON backtest_runs(created_at DESC, id DESC)
+            """
+        )
+
+    @staticmethod
+    def _create_live_model_history(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS live_model_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                horizon_minutes INTEGER NOT NULL,
+                reference_price TEXT NOT NULL,
+                raw_probability_up TEXT NOT NULL,
+                predicted_direction TEXT NOT NULL
+                    CHECK (predicted_direction IN ('UP', 'DOWN')),
+                parameters_json TEXT NOT NULL,
+                observation_sha256 TEXT NOT NULL,
+                outcome_price TEXT,
+                outcome_up INTEGER,
+                successful INTEGER,
+                resolved_at TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(symbol, observed_at, horizon_minutes)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_live_model_symbol_time
+            ON live_model_observations(symbol, observed_at DESC)
+            """
+        )
+
+    @staticmethod
+    def _create_fundamental_news_history(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fundamental_news_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                engine_version TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_fundamental_news_symbol_time
+            ON fundamental_news_snapshots(symbol, observed_at DESC, id DESC)
             """
         )
 

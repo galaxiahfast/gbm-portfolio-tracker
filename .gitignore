@@ -18,6 +18,12 @@ data/
 
 # Archivos temporales, respaldos y empaquetados locales.
 tmp/
-backups/
+backups/*
+!backups/.gitkeep
+!backups/portfolio.db.aesgcm
+!backups/manifest.json
 *.bak
 *.zip
+
+# La estructura SQL sí se versiona; jamás contiene registros del usuario.
+database/*.db

@@ -1,4 +1,6 @@
 import math
+import hashlib
+import json
 from io import BytesIO
 
 import pandas as pd
@@ -7,6 +9,7 @@ from pypdf import PdfReader
 from portfolio_tracker.analytics.technical_probability import analyze_probability
 from portfolio_tracker.services.pdf_report import (
     build_executive_report,
+    build_master_report,
     build_probability_report,
     build_technical_report,
     executive_decision,
@@ -44,6 +47,7 @@ def test_pdf_report_is_valid_and_contains_executive_and_technical_sections() -> 
     reader = PdfReader(BytesIO(payload))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     assert "Resumen ejecutivo" in text
+    assert "Contexto fundamental y noticias" in text
     assert "Plan de ejecución y riesgo" in text
     assert "Probabilidades y precios por horizonte" in text
     assert "Trayectoria proyectada - proximos 15 dias habiles" in text
@@ -93,6 +97,55 @@ def test_three_pdf_download_scopes_are_independent_and_valid() -> None:
     assert "Graficas tecnicas reales" in technical_text
     assert "Resumen ejecutivo" not in technical_text
     assert "Resumen ejecutivo" in complete_text and "Graficas tecnicas reales" in complete_text
+
+
+def test_master_pdf_adds_audited_calibration_as_third_view() -> None:
+    analysis = _analysis()
+    result_payload = json.dumps(
+        {
+            "aggregate": {
+                "trades": 12,
+                "win_rate": 0.58,
+                "profit_factor": 1.42,
+                "maximum_drawdown_pct": 6.2,
+            },
+            "aggregate_decision": "APROBADO",
+        },
+        sort_keys=True,
+    )
+    context = {
+        "online_stats": {
+            "resolved": 8,
+            "accuracy": 0.625,
+            "brier_score": 0.21,
+            "adaptive_threshold": 0.56,
+        },
+        "backtest_run": {
+            "id": 7,
+            "status": "APPROVED",
+            "engine_version": "oos-test",
+            "parameters_json": json.dumps(
+                {
+                    "minimum_probability": 0.57,
+                    "stop_atr_multiple": 2.25,
+                    "risk_per_trade_pct": 0.5,
+                    "optimization_trials": 18,
+                }
+            ),
+            "dataset_sha256": "d" * 64,
+            "payload_json": result_payload,
+            "payload_sha256": hashlib.sha256(result_payload.encode()).hexdigest(),
+        },
+    }
+    payload = build_master_report(analysis, context)
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(payload)).pages)
+
+    assert payload.startswith(b"%PDF")
+    assert "Resumen ejecutivo" in text
+    assert "Graficas tecnicas reales" in text
+    assert "Calibración y backtesting" in text
+    assert "Integridad SHA-256" in text
+    assert "VALIDA" in text
 
 
 def test_technical_pdf_contains_every_advanced_chart() -> None:

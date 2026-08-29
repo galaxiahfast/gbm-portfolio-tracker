@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
+import math
 
 import pandas as pd
 
@@ -202,6 +203,101 @@ class ProbabilityAnalysis:
     horizon_projections: tuple[HorizonProjection, ...]
     execution_levels: ExecutionLevels
     daily_projection: tuple[DailyProjectionPoint, ...]
+    fundamental_score: float = 0.0
+    fundamental_label: str = "Sin actualizar"
+    fundamental_reasons: tuple[str, ...] = ()
+    fundamental_risk_veto: bool = False
+    fundamental_snapshot_sha256: str = ""
+    fundamental_as_of: str = ""
+
+
+def validate_probability_analysis(analysis: ProbabilityAnalysis) -> None:
+    """Aplica invariantes matemáticos antes de exponer o persistir un análisis."""
+
+    scalar_values = {
+        "precio": analysis.last_price,
+        "probabilidad de subida": analysis.probability_up,
+        "probabilidad de bajada": analysis.probability_down,
+        "ATR 5m": analysis.atr_5m,
+        "Bollinger inferior": analysis.bollinger_lower,
+        "Bollinger media": analysis.bollinger_middle,
+        "Bollinger superior": analysis.bollinger_upper,
+        "Estocástico %K": analysis.stochastic_k,
+        "Estocástico %D": analysis.stochastic_d,
+        "VWAP": analysis.vwap,
+    }
+    invalid_scalars = [name for name, value in scalar_values.items() if not math.isfinite(float(value))]
+    if invalid_scalars:
+        raise ValueError("El análisis contiene valores no finitos: " + ", ".join(invalid_scalars) + ".")
+    if analysis.last_price <= 0 or analysis.atr_5m <= 0 or analysis.vwap <= 0:
+        raise ValueError("Precio, VWAP y ATR deben ser estrictamente positivos.")
+    if not 0 <= analysis.probability_up <= 100 or not 0 <= analysis.probability_down <= 100:
+        raise ValueError("Las probabilidades direccionales deben permanecer entre 0 y 100.")
+    if not math.isclose(analysis.probability_up + analysis.probability_down, 100.0, abs_tol=0.11):
+        raise ValueError("Las probabilidades de subida y bajada no suman 100%.")
+    if not 0 <= analysis.operation_probability <= 100:
+        raise ValueError("La probabilidad operativa quedó fuera de 0–100%.")
+    if not 0 <= analysis.stochastic_k <= 100 or not 0 <= analysis.stochastic_d <= 100:
+        raise ValueError("El Estocástico RSI quedó fuera de su dominio 0–100.")
+    if not analysis.bollinger_lower <= analysis.bollinger_middle <= analysis.bollinger_upper:
+        raise ValueError("Las Bandas de Bollinger no conservan el orden inferior ≤ media ≤ superior.")
+    if not math.isclose(
+        analysis.macd_5m - analysis.macd_signal_5m,
+        analysis.macd_histogram_5m,
+        abs_tol=1e-8,
+    ) or not math.isclose(
+        analysis.macd_daily - analysis.macd_signal_daily,
+        analysis.macd_histogram_daily,
+        abs_tol=1e-8,
+    ):
+        raise ValueError("El histograma MACD no coincide con MACD menos su señal.")
+
+    required_frames = {
+        "intradía": analysis.intraday_indicators,
+        "diario": analysis.daily_indicators,
+    }
+    for label, frame in required_frames.items():
+        if frame.empty or not frame.index.is_monotonic_increasing or frame.index.has_duplicates:
+            raise ValueError(f"El marco {label} está vacío, desordenado o contiene fechas duplicadas.")
+        for column in ("Open", "High", "Low", "Close"):
+            if column not in frame or not pd.to_numeric(frame[column], errors="coerce").map(math.isfinite).all():
+                raise ValueError(f"El marco {label} contiene datos inválidos en {column}.")
+        if (
+            (frame["High"] < frame[["Open", "Close", "Low"]].max(axis=1)).any()
+            or (frame["Low"] > frame[["Open", "Close", "High"]].min(axis=1)).any()
+        ):
+            raise ValueError(f"El marco {label} contiene velas OHLC incoherentes.")
+
+    if len(analysis.horizon_projections) != 6:
+        raise ValueError("El mapa debe contener seis horizontes temporales.")
+    for horizon in analysis.horizon_projections:
+        total = horizon.probability_up + horizon.probability_range + horizon.probability_down
+        if not math.isclose(total, 100.0, abs_tol=0.2):
+            raise ValueError(f"Las probabilidades de {horizon.label} no suman 100%.")
+        if min(horizon.bullish_target, horizon.range_low, horizon.range_high, horizon.bearish_target) <= 0:
+            raise ValueError(f"El horizonte {horizon.label} contiene precios no positivos.")
+        if horizon.range_low > horizon.range_high or horizon.atr_value < 0:
+            raise ValueError(f"El rango o ATR de {horizon.label} es inválido.")
+
+    if len(analysis.daily_projection) != 15:
+        raise ValueError("La proyección debe contener exactamente 15 sesiones.")
+    previous_date = None
+    for expected_day, point in enumerate(analysis.daily_projection, start=1):
+        if point.day_number != expected_day or (previous_date and point.session_date <= previous_date):
+            raise ValueError("La proyección diaria está desordenada o contiene sesiones duplicadas.")
+        if point.daily_floor <= 0 or not point.daily_floor <= point.expected_close <= point.daily_ceiling:
+            raise ValueError(f"La vela proyectada del día {expected_day} es matemáticamente inválida.")
+        previous_date = point.session_date
+
+    levels = analysis.execution_levels
+    if levels.direction == "LONG":
+        if not levels.stop_loss < levels.entry_low <= levels.entry_high < levels.take_profit_1 <= levels.take_profit_2:
+            raise ValueError("Los niveles LONG no respetan stop < entrada < objetivos.")
+    elif levels.direction == "SHORT":
+        if not levels.take_profit_2 <= levels.take_profit_1 < levels.entry_low <= levels.entry_high < levels.stop_loss:
+            raise ValueError("Los niveles SHORT no respetan objetivos < entrada < invalidación.")
+    else:
+        raise ValueError("La dirección del plan de ejecución no es LONG ni SHORT.")
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -694,7 +790,13 @@ def _monthly_execution_policy(
     )
 
 
-def analyze_probability(symbol: str, intraday: pd.DataFrame, daily: pd.DataFrame) -> ProbabilityAnalysis:
+def analyze_probability(
+    symbol: str,
+    intraday: pd.DataFrame,
+    daily: pd.DataFrame,
+    *,
+    atr_stop_multiple: float = 2.25,
+) -> ProbabilityAnalysis:
     if len(intraday) < 40:
         raise ValueError("Se requieren al menos 40 velas intradía utilizables.")
     if len(daily) < 35:
@@ -953,6 +1055,7 @@ def analyze_probability(symbol: str, intraday: pd.DataFrame, daily: pd.DataFrame
         probability_up=probability_up,
         signal="BUY" if planned_direction == "LONG" else "SELL",
         intraday_atr=atr_5m,
+        atr_stop_multiple=atr_stop_multiple,
         confirmed_pattern_target=(
             active_double_bottom.target_price if active_double_bottom else None
         ),
@@ -1042,7 +1145,7 @@ def analyze_probability(symbol: str, intraday: pd.DataFrame, daily: pd.DataFrame
     if datetime.now(timezone.utc) - as_of.astimezone(timezone.utc) > timedelta(hours=24):
         warnings.append("La última vela corresponde a una sesión anterior.")
     warnings.append("Puntaje heurístico no calibrado; no es recomendación ni garantía de resultado.")
-    return ProbabilityAnalysis(
+    analysis = ProbabilityAnalysis(
         symbol=symbol.upper(), as_of=as_of, last_price=price, probability_up=probability_up, probability_down=decision.probability_down, signal=signal, daily_trend=trend,
         volume_confirmed=volume_confirmed, volume_ratio=volume_ratio, stochastic_k=k_value, stochastic_d=d_value, atr_5m=atr_5m, stoch_overbought_extreme=stoch_overbought_extreme, stoch_oversold_extreme=stoch_oversold_extreme, rebound_watch_active=rebound_watch_active, support_interaction=support_interaction, nearest_support=nearest_support, long_entry_blocked=stoch_overbought_extreme, execution_plan_conditional=execution_plan_conditional, execution_plan_label=execution_plan_label, activation_trigger=activation_trigger, activation_trigger_met=activation_trigger_met, tactical_short=tactical_short, exposure_factor=exposure_factor, neckline_heat_warning=neckline_heat_warning, bollinger_upper=upper_band, bollinger_middle=float(latest["BB_middle"]), bollinger_lower=lower_band,
         ema9=ema9, ema21=ema21, ema50=ema50, ema200=ema200, macd_5m=float(latest["MACD"]), macd_signal_5m=float(latest["MACD_signal"]), macd_histogram_5m=float(latest["MACD_histogram"]),
@@ -1053,3 +1156,5 @@ def analyze_probability(symbol: str, intraday: pd.DataFrame, daily: pd.DataFrame
         weekly_trend=weekly_trend, monthly_trend=monthly_trend, weekly_support=weekly_support, weekly_resistance=weekly_resistance, annual_fibonacci=annual_fibonacci, liquidity_zones=liquidity_zones, operation_probability=decision.operation_probability, risk_veto=decision.risk_veto, risk_alert=decision.alert, risk_reasons=decision.reasons, scenario=decision.scenario, overextended_unconfirmed=overextended_unconfirmed,
         signal_rejected=rejected or decision.risk_veto, score_breakdown=breakdown, pivots=pivots, suggested_level=suggested_level, verdict=verdict, observations=observations, warnings=tuple(warnings), intraday_indicators=intraday_indicators, hourly_indicators=hourly_indicators, daily_indicators=daily_indicators, weekly_indicators=weekly_indicators, monthly_indicators=monthly_indicators, chart_patterns=chart_patterns, chart_pattern_impact=pattern_influence.impact_points, chart_pattern_veto=pattern_influence.veto, horizon_projections=horizon_projections, execution_levels=execution_levels, daily_projection=daily_projection,
     )
+    validate_probability_analysis(analysis)
+    return analysis

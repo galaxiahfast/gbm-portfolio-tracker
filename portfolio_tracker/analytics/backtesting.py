@@ -8,7 +8,7 @@ esa calibración antes de evaluar validación.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -144,6 +144,29 @@ class BacktestBatchResult:
     aggregate: PerformanceMetrics
     aggregate_decision: str
     dataset_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizationTrial:
+    minimum_probability: float
+    stop_atr_multiple: float
+    risk_per_trade_pct: float
+    trades: int
+    wins: int
+    long_wins: int
+    short_wins: int
+    win_rate: float
+    profit_factor: float | None
+    maximum_drawdown_pct: float
+    brier_score: float | None
+    objective_score: float
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestOptimizationResult:
+    best_config: BacktestConfig
+    final_oos: BacktestBatchResult
+    trials: tuple[OptimizationTrial, ...]
 
 
 def _normalize_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -637,6 +660,118 @@ def run_backtest_batch(
         aggregate=aggregate,
         aggregate_decision=aggregate_decision,
         dataset_sha256=digest.hexdigest(),
+    )
+
+
+def optimize_backtest_parameters(
+    frames: Mapping[str, pd.DataFrame],
+    base_config: BacktestConfig,
+    *,
+    starting_capital_usd: float,
+    probability_grid: tuple[float, ...] = (0.52, 0.57),
+    atr_grid: tuple[float, ...] = (2.0, 2.25),
+    risk_grid: tuple[float, ...] = (0.50, 1.00),
+) -> BacktestOptimizationResult:
+    """Optimiza dentro de entrenamiento y conserva intacto el OOS final.
+
+    La rejilla se evalúa sobre un subperiodo que termina antes del corte OOS
+    definitivo. El ganador se congela y solo entonces se prueba sobre los datos
+    completos. Esto evita seleccionar parámetros mirando el resultado final.
+    """
+
+    if not probability_grid or not atr_grid or not risk_grid:
+        raise ValueError("La rejilla de optimización no puede estar vacía.")
+    inner_frames: dict[str, pd.DataFrame] = {}
+    for symbol, frame in frames.items():
+        normalized = _normalize_frame(frame)
+        outer_cut = int(len(normalized) * base_config.training_fraction)
+        training_only = normalized.iloc[:outer_cut].copy()
+        if len(training_only) < 300:
+            raise ValueError(
+                f"{symbol}: el tramo de entrenamiento no alcanza 300 sesiones."
+            )
+        inner_frames[symbol] = training_only
+
+    trials: list[OptimizationTrial] = []
+    ranked: list[tuple[float, BacktestConfig]] = []
+    for probability in probability_grid:
+        for atr_multiple in atr_grid:
+            for risk_pct in risk_grid:
+                trial_config = replace(
+                    base_config,
+                    training_fraction=0.70,
+                    minimum_probability=float(probability),
+                    stop_atr_multiple=float(atr_multiple),
+                    risk_per_trade_pct=float(risk_pct),
+                )
+                batch = run_backtest_batch(
+                    inner_frames,
+                    trial_config,
+                    starting_capital_usd=starting_capital_usd,
+                )
+                metrics = batch.aggregate
+                validation_trades = [
+                    trade for result in batch.results for trade in result.validation_trades
+                ]
+                long_wins = sum(
+                    trade.side == "LONG" and trade.net_pnl_usd > 0
+                    for trade in validation_trades
+                )
+                short_wins = sum(
+                    trade.side == "SHORT" and trade.net_pnl_usd > 0
+                    for trade in validation_trades
+                )
+                profit_factor = metrics.profit_factor or (3.0 if metrics.trades else 0.0)
+                brier = metrics.brier_score if metrics.brier_score is not None else 0.50
+                scarcity_penalty = max(
+                    0, trial_config.minimum_validation_trades - metrics.trades
+                ) * 4.0
+                direction_penalty = 5.0 if metrics.wins and (long_wins == 0 or short_wins == 0) else 0.0
+                objective = (
+                    metrics.win_rate_lower_bound * 100
+                    + min(profit_factor, 3.0) * 8
+                    + math.log1p(metrics.wins) * 4
+                    - metrics.maximum_drawdown_pct
+                    - brier * 12
+                    - scarcity_penalty
+                    - direction_penalty
+                    + min(metrics.net_return_pct, 20.0) * 0.20
+                )
+                trial = OptimizationTrial(
+                    minimum_probability=float(probability),
+                    stop_atr_multiple=float(atr_multiple),
+                    risk_per_trade_pct=float(risk_pct),
+                    trades=metrics.trades,
+                    wins=metrics.wins,
+                    long_wins=long_wins,
+                    short_wins=short_wins,
+                    win_rate=metrics.win_rate,
+                    profit_factor=metrics.profit_factor,
+                    maximum_drawdown_pct=metrics.maximum_drawdown_pct,
+                    brier_score=metrics.brier_score,
+                    objective_score=objective,
+                )
+                trials.append(trial)
+                ranked.append((objective, trial_config))
+    _, inner_winner = max(
+        ranked,
+        key=lambda item: (
+            item[0],
+            -item[1].minimum_probability,
+            -item[1].risk_per_trade_pct,
+        ),
+    )
+    best_config = replace(
+        inner_winner,
+        training_fraction=base_config.training_fraction,
+    )
+    final_oos = run_backtest_batch(
+        frames, best_config, starting_capital_usd=starting_capital_usd
+    )
+    return BacktestOptimizationResult(
+        best_config=best_config,
+        final_oos=final_oos,
+        trials=tuple(sorted(trials, key=lambda item: item.objective_score, reverse=True)),
     )
 
 

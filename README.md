@@ -99,7 +99,7 @@ Estos criterios recogen conceptualmente disciplina, riesgo/recompensa y lectura 
 
 ## Predictor de probabilidades · Fase 4
 
-La página analiza SMCI por defecto y acepta otro ticker de Estados Unidos. Realiza solo dos descargas por emisora: un mes de velas a 5 minutos y cinco años diarios, con caché de cinco minutos, actualización en segundo plano y máximo de 12 emisoras almacenadas. Las vistas de 1 hora, semanal y mensual se derivan localmente. Calcula:
+La página analiza SMCI por defecto y acepta otro ticker de Estados Unidos. Realiza solo dos descargas por emisora: un mes de velas a 5 minutos y cinco años diarios, con caché de cuatro minutos y máximo de 12 emisoras almacenadas. Durante la sesión regular de EUA, un fragmento independiente se actualiza cada cinco minutos. Las vistas de 1 hora, semanal y mensual se derivan localmente. Calcula:
 
 - Stoch RSI (14,14,3,3) y Bandas de Bollinger (20,2);
 - cruce %K/%D en sobrecompra o sobreventa y contacto con banda;
@@ -118,14 +118,17 @@ La página analiza SMCI por defecto y acepta otro ticker de Estados Unidos. Real
 - veto central que limita la probabilidad de la operación a 39% cuando el macro contradice el gatillo, ADX es menor a 20 o existe sobreextensión diaria sin volumen;
 - puntaje ponderado auditable de subida/bajada y nivel técnico de vigilancia.
 
-La interfaz superior separa dos experiencias sin repetir las descargas:
+La interfaz superior separa tres experiencias sin repetir las descargas:
 
-- **Vista Ejecutiva (Modo Rápido):** decisión concreta, zona de entrada, stop loss, dos take profits y distribución subida/rango/bajada para 1 hora, 6 horas, 1 día, 1 semana, 1 mes y 6 meses. La tabla conserva esos horizontes como mapa comparativo. La gráfica principal es independiente: proyecta estrictamente Día 1 a Día 15 sobre sesiones hábiles, con cierre esperado y piso/techo derivados de retorno reciente, contexto EMA/MACD, confluencia y ATR diario.
+- **Vista Ejecutiva (Modo Rápido):** decisión concreta, zona de entrada, stop loss, dos take profits y distribución subida/rango/bajada para 1 hora, 6 horas, 1 día, 1 semana, 1 mes y 6 meses. La gráfica enlaza 30 velas OHLC diarias observadas con 15 velas futuras bootstrap, separadas visualmente para no confundir histórico y escenario.
 - **Vista Técnica Avanzada (Completa):** conserva los paneles intradiario, diario/semanal y mensual/anual, todas las gráficas técnicas y la tabla auditable de aportes del motor.
+- **Calibración y backtesting:** prueba automáticamente rejillas de umbral, múltiplo ATR y riesgo dentro del entrenamiento; congela el ganador y lo valida una sola vez en el tramo fuera de muestra.
 
 Las pestañas son dinámicas: la vista técnica solo construye sus gráficas cuando se abre. El PDF se genera en memoria con ReportLab, no escribe datos del usuario en el repositorio e incluye la trayectoria vectorial de 15 sesiones, Bandas de Bollinger/VWAP, Estocástico RSI, MACD intradía y estructura EMA diaria construidos desde los mismos DataFrames reales de la vista avanzada, además del bloque estructurado para revisión por otra IA.
 
-La barra superior del predictor ofrece tres descargas consistentes con el mismo corte de mercado: Vista Ejecutiva, Vista Técnica Avanzada y Reporte Completo. El PDF técnico incorpora quince paneles disponibles: Bollinger/VWAP, Estocástico RSI, MACD 5m y 1h, ADX/+DI/-DI, OBV, estructuras EMA diaria/semanal/mensual, MACD diario/semanal/mensual, Ichimoku diario y dos paneles de patrones chartistas (5m y diario). Si una temporalidad todavía no reúne observaciones suficientes, el reporte lo indica sin cancelar las demás páginas.
+Justo encima de las tres pestañas, la barra del predictor ofrece cuatro descargas consistentes con el mismo corte de mercado: Vista Ejecutiva, Vista Técnica Avanzada, PDF combinado de ambas y PDF Maestro. El maestro añade la última calibración/backtesting registrada, sus parámetros, métricas OOS, realimentación progresiva y verificación SHA-256. El PDF técnico incorpora quince paneles disponibles: Bollinger/VWAP, Estocástico RSI, MACD 5m y 1h, ADX/+DI/-DI, OBV, estructuras EMA diaria/semanal/mensual, MACD diario/semanal/mensual, Ichimoku diario y dos paneles de patrones chartistas (5m y diario). Si una temporalidad todavía no reúne observaciones suficientes, el reporte lo indica sin cancelar las demás páginas.
+
+Antes de entregar un resultado, el motor aplica invariantes matemáticos: OHLC positivo y coherente, índices ordenados y únicos, Estocástico RSI en 0–100, Bandas de Bollinger ordenadas, identidad MACD–señal–histograma, probabilidades complementarias, seis horizontes completos, 15 sesiones proyectadas válidas y stops/objetivos coherentes con LONG o SHORT. Un fallo detiene el análisis en vez de mostrar cifras parciales o sesgadas.
 
 El detector de patrones usa pivotes Zig-Zag dependientes del ATR y evalúa dobles/triples techos o suelos, rupturas de rango con volumen superior a 1.2x y microestructuras de tres impulsos/ABC. Solo una figura confirmada con más de 75% modifica el motor; una figura bajista confirmada en 5m veta una compra y una figura alcista equivalente veta una venta. Las formaciones incompletas se muestran para auditoría, pero no alteran probabilidades.
 
@@ -133,7 +136,13 @@ La navegación incluye **Control de implementación**, un inventario local que r
 
 Los objetivos monetarios de la tabla combinan ATR de Wilder de 14 periodos escalado por horizonte, Bandas de Bollinger de 20 periodos y soportes/resistencias locales. La probabilidad es simétrica: el MACD de 5 minutos, su aceleración, el retorno de las seis velas cerradas más recientes y la distancia al VWAP dominan el sesgo inmediato; el veto reduce la conveniencia de operar sin invertir la lectura direccional. La proyección diaria usa bloques bootstrap de retornos históricos, una deriva limitada por ATR, reacción suave a soportes/resistencias y percentiles 15–85 de 320 trayectorias reproducibles. Las fechas son días hábiles de lunes a viernes; no sustituyen un calendario oficial de feriados bursátiles. Son escenarios informativos, no velas observadas, órdenes ni precios garantizados.
 
-El puntaje parte de 50% y cada filtro aporta puntos visibles en la interfaz. Sin señal principal se limita a 40–60%; una señal solo vigilada se limita a 35–65%. Una señal confirmada que contradiga el MACD de 5 minutos queda rechazada. La regla de oro de Fase 4 tiene prioridad sobre todos los bonos y produce una recomendación concreta de evitar la operación cuando se activa. Este resultado sigue siendo heurístico, no una probabilidad calibrada con resultados históricos. El módulo no genera ni ejecuta órdenes.
+El puntaje parte de 50% y cada filtro aporta puntos visibles en la interfaz. Sin señal principal se limita a 40–60%; una señal solo vigilada se limita a 35–65%. Una señal confirmada que contradiga el MACD de 5 minutos queda rechazada. La regla de oro de Fase 4 tiene prioridad sobre todos los bonos y produce una recomendación concreta de evitar la operación cuando se activa. Mientras el mercado está abierto, cada corte nuevo se registra una sola vez y se resuelve después de una sesión para medir acierto y Brier; el umbral operativo se adapta gradualmente, con límites prudenciales. El módulo no genera ni ejecuta órdenes.
+
+### Análisis fundamental y noticias
+
+El Predictor obtiene para la emisora seleccionada —incluidas TSLA, NVDA, SMCI y GME— métricas clave de resultados, balance y flujo de caja, calendario corporativo y hasta 20 noticias recientes. Las consultas se cachean 30 minutos. Cada corte completo se serializa de forma canónica, se versiona en SQLite y se protege con SHA-256; la auditoría recalcula todas las huellas.
+
+La ponderación está limitada y es simétrica: rentabilidad, crecimiento, caja libre y deuda aportan al componente fundamental; los titulares usan vocabulario explícito, relevancia temática (IA, semiconductores, tasas y resultados) y decaimiento de 72 horas. Un deterioro severo veta LONG, una confluencia positiva severa veta SHORT y resultados dentro de tres días vetan ambos sentidos por riesgo de gap. Un corte antiguo pierde peso y no conserva vetos indefinidamente. Si Yahoo falla, solo se reutiliza el último corte local con SHA-256 válido; sin corte verificable, el efecto es neutral.
 
 ## Verificación
 
@@ -174,6 +183,22 @@ La sección **Auditoría** comprueba:
 - imágenes huérfanas, vínculos duplicados y operaciones sin imagen.
 
 Cierra la aplicación y copia la carpeta `data/`. La base y los comprobantes deben respaldarse juntos. No compartas esa carpeta si contiene información personal.
-=======
-# gbm-portfolio-tracker
-Aplicación web interactiva en Python para el control de portafolio en GBM+ (SIC/EUA) con gestión de divisas MXN/USD, lectura de comprobantes por OCR, contabilidad FIFO y arquitectura modular extensible para análisis predictivo.
+
+### Respaldo cifrado opcional en GitHub
+
+El script `scripts/sync_github_backup.ps1` crea una instantánea consistente, la cifra con AES-256-GCM y prepara únicamente tres archivos seguros: el respaldo cifrado, su manifiesto SHA-256 y `database/schema.sql` sin registros. La clave no se guarda en archivos ni en Git.
+
+```powershell
+# Ejecutar una sola vez por equipo y conservar el resultado en un gestor de contraseñas:
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+$env:GBM_BACKUP_KEY = [Convert]::ToBase64String($bytes).Replace('+','-').Replace('/','_')
+
+# Crear y preparar el respaldo seguro, sin commit ni push:
+.\scripts\sync_github_backup.ps1
+
+# Crear commit y sincronizar con el remoto configurado:
+.\scripts\sync_github_backup.ps1 -Commit -Push
+```
+
+La restauración exige la misma `GBM_BACKUP_KEY`. Nunca publiques esa clave, `.env`, `secrets.toml`, la carpeta `data/` ni los comprobantes originales.

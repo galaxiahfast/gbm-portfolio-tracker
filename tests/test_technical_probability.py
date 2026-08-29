@@ -1,7 +1,9 @@
 import math
+from dataclasses import replace
 from datetime import timedelta
 
 import pandas as pd
+import pytest
 
 from portfolio_tracker.analytics.technical_probability import (
     CandlePattern,
@@ -21,6 +23,7 @@ from portfolio_tracker.analytics.technical_probability import (
     add_intraday_indicators,
     analyze_probability,
     preliminary_probability,
+    validate_probability_analysis,
 )
 
 
@@ -93,6 +96,11 @@ def test_analysis_builds_indicators_pivots_and_complementary_probabilities() -> 
     assert phase3_filters.issubset({item.name for item in analysis.score_breakdown})
     assert analysis.weekly_support < analysis.weekly_resistance
     assert 0 < analysis.execution_levels.stop_loss < analysis.execution_levels.entry_low
+    validate_probability_analysis(analysis)
+    with pytest.raises(ValueError, match="no suman 100"):
+        validate_probability_analysis(
+            replace(analysis, probability_down=analysis.probability_down + 1)
+        )
     assert analysis.execution_levels.entry_high <= analysis.last_price
     assert analysis.last_price <= analysis.execution_levels.take_profit_1
     assert analysis.execution_levels.take_profit_1 <= analysis.execution_levels.take_profit_2

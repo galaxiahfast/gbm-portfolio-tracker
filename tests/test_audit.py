@@ -42,3 +42,7 @@ def test_audit_reconciles_cash_positions_and_receipt_hash(tmp_path) -> None:
     assert report.status is AuditLevel.PASS
     assert report.errors == 0
     assert report.warnings == 0
+    assert any(
+        item.area == "Fundamentales y noticias" and item.level is AuditLevel.PASS
+        for item in report.findings
+    )

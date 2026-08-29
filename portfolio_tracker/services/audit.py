@@ -93,6 +93,8 @@ class PortfolioAuditor:
         self._check_trade_math(findings, trades)
         self._check_receipts(findings, trades)
         self._check_backtests(findings)
+        self._check_live_model(findings)
+        self._check_fundamental_news(findings)
         return AuditReport(datetime.now(timezone.utc), tuple(findings))
 
     def _check_database(self, findings: list[AuditFinding]) -> None:
@@ -413,5 +415,45 @@ class PortfolioAuditor:
                 "Backtesting",
                 AuditLevel.PASS,
                 f"Integridad SHA-256 confirmada en {valid} ejecución(es) estadística(s).",
+            )
+        )
+
+    def _check_live_model(self, findings: list[AuditFinding]) -> None:
+        valid, invalid_ids = self.repository.verify_live_model_observations()
+        if invalid_ids:
+            findings.append(
+                AuditFinding(
+                    "Calibración continua",
+                    AuditLevel.ERROR,
+                    "La huella de una observación del modelo no coincide.",
+                    "observaciones " + ", ".join(f"#{item}" for item in invalid_ids),
+                )
+            )
+            return
+        findings.append(
+            AuditFinding(
+                "Calibración continua",
+                AuditLevel.PASS,
+                f"SHA-256 confirmado en {valid} observación(es) del modelo.",
+            )
+        )
+
+    def _check_fundamental_news(self, findings: list[AuditFinding]) -> None:
+        valid, invalid_ids = self.repository.verify_fundamental_news_snapshots()
+        if invalid_ids:
+            findings.append(
+                AuditFinding(
+                    "Fundamentales y noticias",
+                    AuditLevel.ERROR,
+                    "La huella de uno o más cortes fundamentales no coincide.",
+                    "cortes " + ", ".join(f"#{item}" for item in invalid_ids),
+                )
+            )
+            return
+        findings.append(
+            AuditFinding(
+                "Fundamentales y noticias",
+                AuditLevel.PASS,
+                f"SHA-256 confirmado en {valid} corte(s) versionado(s).",
             )
         )

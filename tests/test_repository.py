@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from portfolio_tracker.db import Database
@@ -60,7 +60,7 @@ def test_migrations_adopt_existing_database_and_recreate_missing_table(tmp_path)
 
     database = Database(path)
     database.initialize()
-    assert database.schema_version() == 5
+    assert database.schema_version() == 7
     with database.connect() as connection:
         columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(trades)")
@@ -121,8 +121,48 @@ def test_backtest_payload_is_persisted_with_auditable_hash(tmp_path) -> None:
     )
 
     history = repository.list_backtest_runs()
+    latest = repository.latest_backtest_run()
     valid, invalid = repository.verify_backtest_runs()
     assert history[0]["id"] == run_id
     assert history[0]["status"] == "REJECTED"
+    assert latest is not None and latest["payload_json"] == '{"result":"strict-oos"}'
+    assert valid == 1
+    assert invalid == ()
+
+
+def test_live_model_feedback_is_unique_resolved_and_hash_audited(tmp_path) -> None:
+    repository = PortfolioRepository(Database(tmp_path / "portfolio.db"))
+    repository.database.initialize()
+    observed_at = datetime(2026, 8, 28, 14, 30, tzinfo=timezone.utc)
+    parameters = '{"minimum_probability":0.55}'
+
+    created = repository.record_live_model_observation(
+        symbol="SMCI",
+        observed_at=observed_at,
+        reference_price=Decimal("40.00"),
+        raw_probability_up=Decimal("0.62"),
+        parameters_json=parameters,
+    )
+    duplicate = repository.record_live_model_observation(
+        symbol="SMCI",
+        observed_at=observed_at,
+        reference_price=Decimal("40.00"),
+        raw_probability_up=Decimal("0.62"),
+        parameters_json=parameters,
+    )
+    resolved = repository.resolve_live_model_observations(
+        symbol="SMCI",
+        current_price=Decimal("41.00"),
+        current_as_of=observed_at + timedelta(minutes=391),
+    )
+    stats = repository.live_model_stats("SMCI")
+    valid, invalid = repository.verify_live_model_observations()
+
+    assert created is True
+    assert duplicate is False
+    assert resolved == 1
+    assert stats["resolved"] == 1
+    assert stats["accuracy"] == 1.0
+    assert 0.52 <= stats["adaptive_threshold"] <= 0.65
     assert valid == 1
     assert invalid == ()

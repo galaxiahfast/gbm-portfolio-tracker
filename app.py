@@ -8,10 +8,11 @@ from __future__ import annotations
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
-from datetime import date, datetime, time, timezone
+from dataclasses import asdict, replace
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -19,10 +20,19 @@ import streamlit as st
 from portfolio_tracker.analytics.backtesting import (
     BacktestBatchResult,
     BacktestConfig,
+    BacktestOptimizationResult,
     batch_to_payload,
+    optimize_backtest_parameters,
     run_backtest_batch,
 )
 from portfolio_tracker.analytics.chart_patterns import PatternDirection
+from portfolio_tracker.analytics.fundamental_news import (
+    FundamentalNewsSnapshot,
+    apply_fundamental_filter,
+    download_fundamental_news,
+    snapshot_from_payload,
+    snapshot_to_payload,
+)
 from portfolio_tracker.analytics.risk import concentration_warnings
 from portfolio_tracker.analytics.multi_timeframe import MacroTrend
 from portfolio_tracker.analytics.technical_probability import (
@@ -59,6 +69,7 @@ from portfolio_tracker.services.ocr import GbmOcrExtractor, OcrUnavailableError
 from portfolio_tracker.services.portfolio import PortfolioCalculator
 from portfolio_tracker.services.pdf_report import (
     build_executive_report,
+    build_master_report,
     build_probability_report,
     build_technical_report,
     executive_decision,
@@ -149,13 +160,18 @@ def fetch_live_prices(
     return output, failures
 
 
-@st.cache_data(
-    ttl="5m", max_entries=12, show_spinner=False, refresh_mode="background"
-)
+@st.cache_data(ttl="4m", max_entries=12, show_spinner=False)
 def fetch_probability_frames(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Mantiene las velas del predictor acotadas y actualizadas sin bloquear reruns."""
 
     return download_quant_frames(symbol)
+
+
+@st.cache_data(ttl="30m", max_entries=12, show_spinner=False)
+def fetch_fundamental_snapshot(symbol: str) -> FundamentalNewsSnapshot:
+    """Corte fundamental/noticioso acotado; nunca se recalcula en cada rerun."""
+
+    return download_fundamental_news(symbol)
 
 
 @st.cache_data(ttl=6 * 60 * 60, max_entries=32, show_spinner=False)
@@ -239,6 +255,17 @@ def show_market_notice() -> None:
             "No fue posible actualizar en línea. Se está usando la última tasa "
             "guardada; puedes calibrarla manualmente en Configuración."
         )
+
+
+US_MARKET_TIMEZONE = ZoneInfo("America/New_York")
+
+
+def us_regular_market_is_open(now: datetime | None = None) -> bool:
+    """Horario regular aproximado; Yahoo sigue siendo la fuente de la última vela."""
+
+    current = now or datetime.now(timezone.utc)
+    eastern = current.astimezone(US_MARKET_TIMEZONE)
+    return eastern.weekday() < 5 and time(9, 30) <= eastern.time() < time(16, 0)
 
 
 def register_receipt(
@@ -935,27 +962,45 @@ def market_page(repository: PortfolioRepository) -> None:
     st.caption("Las cotizaciones son informativas y pueden tener retraso.")
 
 
-def _render_probability_executive(analysis: ProbabilityAnalysis) -> None:
+def _render_probability_executive(
+    analysis: ProbabilityAnalysis,
+    *,
+    adaptive_probability_threshold: float | None = None,
+) -> None:
     """Panel de decisión breve; no vuelve a consultar ni recalcula datos de mercado."""
 
     decision = executive_decision(analysis)
+    decision_label = decision.label
+    decision_rationale = decision.rationale
+    decision_tone = decision.tone
+    if (
+        adaptive_probability_threshold is not None
+        and analysis.operation_probability / 100 < adaptive_probability_threshold
+        and decision_tone == "success"
+    ):
+        decision_label = "ESPERAR · UMBRAL ONLINE NO ALCANZADO"
+        decision_rationale = (
+            f"El gatillo técnico existe, pero {analysis.operation_probability:.1f}% "
+            f"no supera el umbral adaptativo de {adaptive_probability_threshold:.1%}."
+        )
+        decision_tone = "warning"
     levels = analysis.execution_levels
     bearish_plan = levels.direction == "SHORT"
     zone_label = "Zona de salida / venta" if bearish_plan else "Zona de entrada ideal"
     stop_label = "Invalidación bajista" if bearish_plan else "Stop loss técnico"
     target_label = "Objetivo bajista" if bearish_plan else "Take profit"
-    icon = "🟢" if decision.tone == "success" else "🔴" if decision.tone == "danger" else "🟠"
+    icon = "🟢" if decision_tone == "success" else "🔴" if decision_tone == "danger" else "🟠"
     message = (
-        f"### {icon} {decision.label}\n\n{decision.rationale}\n\n"
+        f"### {icon} {decision_label}\n\n{decision_rationale}\n\n"
         f"**Estado del plan:** {'CONDICIONAL' if analysis.execution_plan_conditional else 'VALIDADO'}  \n"
         f"**{zone_label}:** \\${levels.entry_low:,.2f} - \\${levels.entry_high:,.2f}  \n"
         f"**{stop_label}:** \\${levels.stop_loss:,.2f}  \n"
         f"**{target_label} 1:** \\${levels.take_profit_1:,.2f} · "
         f"**{target_label} 2:** \\${levels.take_profit_2:,.2f}"
     )
-    if decision.tone == "success":
+    if decision_tone == "success":
         st.success(message)
-    elif decision.tone == "danger":
+    elif decision_tone == "danger":
         st.error(message)
     else:
         st.warning(message)
@@ -1096,10 +1141,14 @@ def _render_probability_executive(analysis: ProbabilityAnalysis) -> None:
     )
 
     with st.container(border=True):
-        st.subheader("Trayectoria de niveles proyectados · 15 días hábiles", anchor=False)
+        st.subheader(
+            "Velas históricas y trayectoria proyectada · 30 + 15 sesiones",
+            anchor=False,
+        )
         projection_figure = build_15_day_projection_figure(
             analysis.daily_projection,
             analysis.last_price,
+            analysis.daily_indicators,
         )
         st.plotly_chart(
             projection_figure,
@@ -1113,11 +1162,134 @@ def _render_probability_executive(analysis: ProbabilityAnalysis) -> None:
             },
         )
         st.caption(
-            "Cada punto corresponde a una sesión hábil futura. La línea es un escenario "
-            "bootstrap reproducible con fluctuaciones tomadas de la volatilidad histórica, "
-            "momentum vigente y reacción suave a soportes/resistencias; el corredor muestra "
-            "los percentiles 15–85 de 320 trayectorias. No es una garantía."
+            "Las primeras 30 velas son sesiones OHLC observadas. Después de la línea ámbar, "
+            "las 15 velas son escenarios bootstrap: apertura enlazada, cierre central y "
+            "mechas ATR 15–85. La sección futura no representa precios garantizados."
         )
+
+
+def _render_fundamental_news(
+    analysis: ProbabilityAnalysis,
+    snapshot: FundamentalNewsSnapshot | None,
+    *,
+    compact: bool,
+) -> None:
+    with st.container(border=True):
+        st.subheader("Contexto fundamental y noticias", anchor=False)
+        if snapshot is None:
+            st.info(
+                "No existe todavía un corte fundamental verificable. El motor mantuvo "
+                "ponderación neutral y no inventó métricas."
+            )
+            return
+        with st.container(horizontal=True):
+            st.metric(
+                "Ponderación total",
+                f"{analysis.fundamental_score:+.1f} pp",
+                delta=analysis.fundamental_label,
+                delta_color=(
+                    "normal" if analysis.fundamental_score > 0
+                    else "inverse" if analysis.fundamental_score < 0 else "off"
+                ),
+                border=True,
+            )
+            st.metric(
+                "Fundamental",
+                f"{snapshot.fundamental_points:+.1f} pp",
+                border=True,
+            )
+            st.metric(
+                "Noticias",
+                f"{snapshot.news_points:+.1f} pp",
+                border=True,
+            )
+            st.metric(
+                "Eventos",
+                f"{snapshot.event_points:+.1f} pp",
+                delta="Veto activo" if analysis.fundamental_risk_veto else "Sin veto",
+                delta_color="inverse" if analysis.fundamental_risk_veto else "off",
+                border=True,
+            )
+        st.caption(
+            f"Corte {local_datetime(snapshot.observed_at):%d/%m/%Y %H:%M} · "
+            f"{snapshot.provider} · SHA-256 {analysis.fundamental_snapshot_sha256[:16]}…"
+        )
+        if compact:
+            for reason in analysis.fundamental_reasons[:4]:
+                st.write("• " + reason)
+            return
+
+        metrics = snapshot.metrics
+        metric_rows = [
+            {"Métrica": "Margen neto", "Valor": metrics.get("profit_margin"), "Formato": "ratio"},
+            {"Métrica": "Crecimiento ingresos", "Valor": metrics.get("revenue_growth"), "Formato": "ratio"},
+            {"Métrica": "Crecimiento beneficios", "Valor": metrics.get("earnings_growth"), "Formato": "ratio"},
+            {"Métrica": "Deuda/capital", "Valor": metrics.get("debt_to_equity"), "Formato": "number"},
+            {"Métrica": "Flujo de caja libre", "Valor": metrics.get("free_cash_flow"), "Formato": "usd"},
+            {"Métrica": "Ingresos trimestrales", "Valor": metrics.get("quarterly_revenue"), "Formato": "usd"},
+            {"Métrica": "Beneficio trimestral", "Valor": metrics.get("quarterly_net_income"), "Formato": "usd"},
+        ]
+        display_metrics = pd.DataFrame(
+            [
+                {
+                    "Métrica": row["Métrica"],
+                    "Valor": (
+                        "Sin dato" if row["Valor"] is None
+                        else f"{float(row['Valor']):.1%}" if row["Formato"] == "ratio"
+                        else f"${float(row['Valor']):,.0f}" if row["Formato"] == "usd"
+                        else f"{float(row['Valor']):,.2f}"
+                    ),
+                }
+                for row in metric_rows
+            ]
+        )
+        st.dataframe(display_metrics, hide_index=True, key=f"fundamentals_{analysis.symbol}")
+        if snapshot.events:
+            st.markdown("**Eventos relevantes**")
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Evento": item.kind,
+                            "Fecha": local_datetime(item.event_at),
+                            "Detalle": item.detail,
+                        }
+                        for item in snapshot.events
+                    ]
+                ),
+                hide_index=True,
+                key=f"fundamental_events_{analysis.symbol}",
+                column_config={
+                    "Fecha": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+                },
+            )
+        if snapshot.news:
+            st.markdown("**Flujo de noticias versionado**")
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Fecha": local_datetime(item.published_at),
+                            "Titular": item.title,
+                            "Fuente": item.publisher,
+                            "Temas": ", ".join(item.topics) or "General",
+                            "Impacto": item.sentiment,
+                            "Enlace": item.url or None,
+                        }
+                        for item in snapshot.news
+                    ]
+                ),
+                hide_index=True,
+                key=f"fundamental_news_{analysis.symbol}",
+                column_config={
+                    "Fecha": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+                    "Impacto": st.column_config.NumberColumn(format="%+.2f"),
+                    "Enlace": st.column_config.LinkColumn(display_text="Abrir fuente"),
+                },
+            )
+        with st.expander("Justificación completa del ponderador"):
+            for reason in analysis.fundamental_reasons:
+                st.write("• " + reason)
 
 
 def _render_chart_patterns(
@@ -1198,7 +1370,7 @@ def _render_chart_patterns(
             "las figuras incompletas se muestran únicamente para auditoría."
         )
 
-def probability_predictor_page() -> None:
+def _probability_predictor_content(*, live_mode: bool) -> None:
     page_intro(
         "Predictor de probabilidades · Fase 4",
         "Motor multi-temporal con confluencia rigurosa y veto central de riesgo.",
@@ -1207,7 +1379,17 @@ def probability_predictor_page() -> None:
         "Este porcentaje es un puntaje heurístico preliminar, no una probabilidad "
         "calibrada ni una recomendación de compra o venta."
     )
+    # El contenedor conserva esta posición aunque los bytes se generen después.
+    # Así los cuatro botones quedan físicamente encima de st.tabs.
     actions_slot = st.container()
+    executive_tab, technical_tab, calibration_tab = st.tabs(
+        [
+            "Vista Ejecutiva (Modo Rápido)",
+            "Vista Técnica Avanzada (Completa)",
+            "Calibración y backtesting",
+        ],
+        on_change="rerun",
+    )
 
     st.session_state.setdefault("predictor_symbol", "SMCI")
     with st.form("probability_symbol_form", border=True):
@@ -1235,13 +1417,26 @@ def probability_predictor_page() -> None:
         key="refresh_probability_data",
     ):
         fetch_probability_frames.clear()
+        fetch_fundamental_snapshot.clear()
         st.rerun()
 
     output = st.container()
+    calibrated_parameters = repository.latest_backtest_parameters() or {
+        "minimum_probability": 0.55,
+        "stop_atr_multiple": 2.25,
+        "risk_per_trade_pct": 1.0,
+    }
     try:
         with output.skeleton(height=360):
             intraday, daily = fetch_probability_frames(symbol)
-            analysis = analyze_probability(symbol, intraday, daily)
+            analysis = analyze_probability(
+                symbol,
+                intraday,
+                daily,
+                atr_stop_multiple=float(
+                    calibrated_parameters.get("stop_atr_multiple", 2.25)
+                ),
+            )
     except (QuantMarketDataError, ValueError) as exc:
         output.error(str(exc))
         output.caption(
@@ -1250,9 +1445,85 @@ def probability_predictor_page() -> None:
         )
         return
 
+    fundamental_snapshot: FundamentalNewsSnapshot | None = None
+    fundamental_warning: str | None = None
+    fundamental_hash = ""
+    try:
+        fundamental_snapshot = fetch_fundamental_snapshot(symbol)
+        payload_json = snapshot_to_payload(fundamental_snapshot)
+        _, fundamental_hash = repository.record_fundamental_news_snapshot(
+            symbol=fundamental_snapshot.symbol,
+            observed_at=datetime.fromisoformat(fundamental_snapshot.observed_at),
+            provider=fundamental_snapshot.provider,
+            engine_version=fundamental_snapshot.version,
+            payload_json=payload_json,
+        )
+    except (QuantMarketDataError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        stored = repository.latest_fundamental_news_snapshot(symbol)
+        if stored:
+            try:
+                fundamental_snapshot = snapshot_from_payload(str(stored["payload_json"]))
+                fundamental_hash = str(stored["payload_sha256"])
+                fundamental_warning = (
+                    "La actualización externa falló; se utilizó el último corte local "
+                    "cuya huella SHA-256 fue verificada."
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                fundamental_snapshot = None
+        if fundamental_snapshot is None:
+            fundamental_warning = f"Contexto fundamental neutral: {exc}"
+    if fundamental_snapshot is not None:
+        try:
+            analysis = apply_fundamental_filter(analysis, fundamental_snapshot)
+            analysis = replace(
+                analysis,
+                fundamental_snapshot_sha256=fundamental_hash,
+            )
+        except ValueError as exc:
+            fundamental_warning = f"El corte fundamental fue descartado: {exc}"
+            fundamental_snapshot = None
+
+    if live_mode:
+        repository.resolve_live_model_observations(
+            symbol=analysis.symbol,
+            current_price=Decimal(str(analysis.last_price)),
+            current_as_of=analysis.as_of,
+        )
+        repository.record_live_model_observation(
+            symbol=analysis.symbol,
+            observed_at=analysis.as_of,
+            reference_price=Decimal(str(analysis.last_price)),
+            raw_probability_up=Decimal(str(analysis.probability_up / 100)),
+            parameters_json=json.dumps(calibrated_parameters, sort_keys=True),
+        )
+    online_stats = repository.live_model_stats(analysis.symbol)
+
+    with st.container(border=True):
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.badge(
+                "Mercado EUA abierto · actualización cada 5 min"
+                if live_mode
+                else "Mercado EUA cerrado · último corte disponible",
+                color="green" if live_mode else "gray",
+                icon=":material/sync:" if live_mode else ":material/schedule:",
+            )
+            st.caption(
+                f"Realimentación resuelta: {online_stats['resolved']} observaciones · "
+                f"acierto {online_stats['accuracy']:.1%} · "
+                f"Brier {online_stats['brier_score']:.3f} · "
+                f"umbral adaptativo {online_stats['adaptive_threshold']:.1%}."
+            )
+        if fundamental_warning:
+            st.warning(fundamental_warning)
+
     executive_pdf = build_executive_report(analysis)
     technical_pdf = build_technical_report(analysis)
-    complete_pdf = build_probability_report(analysis)
+    combined_pdf = build_probability_report(analysis)
+    calibration_context = {
+        "backtest_run": repository.latest_backtest_run(),
+        "online_stats": online_stats,
+    }
+    master_pdf = build_master_report(analysis, calibration_context)
     timestamp = analysis.as_of.strftime("%Y%m%d_%H%M")
     with actions_slot.container(border=True):
         st.markdown("**Descargas del análisis actual**")
@@ -1275,26 +1546,37 @@ def probability_predictor_page() -> None:
                 help="Todos los paneles técnicos, indicadores y lectura auditable del motor.",
             )
             st.download_button(
-                "Descargar Reporte Completo (Ambos)",
-                data=complete_pdf,
-                file_name=f"reporte_completo_{analysis.symbol}_{timestamp}.pdf",
+                "Descargar PDF combinado",
+                data=combined_pdf,
+                file_name=f"reporte_combinado_{analysis.symbol}_{timestamp}.pdf",
                 mime="application/pdf",
                 icon=":material/library_books:",
                 help="Combina la vista ejecutiva y la vista técnica avanzada en un único PDF.",
             )
+            st.download_button(
+                "Descargar PDF maestro",
+                data=master_pdf,
+                file_name=f"reporte_maestro_{analysis.symbol}_{timestamp}.pdf",
+                mime="application/pdf",
+                icon=":material/summarize:",
+                help="Incluye las vistas ejecutiva, técnica y la última calibración/backtesting auditada.",
+            )
         st.caption(
-            "Los tres archivos se generan desde el mismo corte de datos para conservar consistencia."
+            "Los cuatro archivos se generan desde el mismo corte de datos; el maestro añade la calibración local auditada."
         )
 
-    executive_tab, technical_tab = st.tabs(
-        ["Vista Ejecutiva (Modo Rápido)", "Vista Técnica Avanzada (Completa)"],
-        on_change="rerun",
-    )
     if executive_tab.open:
         with executive_tab:
-            _render_probability_executive(analysis)
+            _render_probability_executive(
+                analysis,
+                adaptive_probability_threshold=float(
+                    online_stats["adaptive_threshold"]
+                ),
+            )
+            _render_fundamental_news(analysis, fundamental_snapshot, compact=True)
     if technical_tab.open:
         with technical_tab:
+            _render_fundamental_news(analysis, fundamental_snapshot, compact=False)
             signal_labels = {
                 TechnicalSignal.BUY: "Compra confirmada",
                 TechnicalSignal.SELL: "Venta confirmada",
@@ -1665,6 +1947,23 @@ def probability_predictor_page() -> None:
                     f"Última vela: {analysis.as_of.astimezone(LOCAL_TIMEZONE):%d/%m/%Y %H:%M} · "
                     "Fuente: Yahoo Finance mediante yfinance. Datos posiblemente retrasados."
                 )
+    if calibration_tab.open:
+        with calibration_tab:
+            backtesting_page(repository, fx_quote, embedded=True)
+
+
+@st.fragment(run_every="5m")
+def _live_probability_predictor() -> None:
+    """Actualiza solo el predictor durante la sesión regular estadounidense."""
+
+    _probability_predictor_content(live_mode=True)
+
+
+def probability_predictor_page() -> None:
+    if us_regular_market_is_open():
+        _live_probability_predictor()
+    else:
+        _probability_predictor_content(live_mode=False)
 
 
 def _backtest_account_defaults(
@@ -1816,13 +2115,68 @@ def _render_backtest_result(batch: BacktestBatchResult) -> None:
             )
 
 
-def backtesting_page(
-    repository: PortfolioRepository, fx_quote: FxQuote | None
-) -> None:
-    page_intro(
-        "Calibración estadística y backtesting",
-        "Validación fuera de muestra del motor Fase 4 con costos, ATR y veto de capital.",
+def _render_optimization_result(result: BacktestOptimizationResult) -> None:
+    best = result.best_config
+    st.subheader("Parámetros óptimos encontrados", anchor=False)
+    with st.container(horizontal=True):
+        st.metric("Umbral mínimo", f"{best.minimum_probability:.0%}", border=True)
+        st.metric("Distancia del stop", f"{best.stop_atr_multiple:.2f} × ATR", border=True)
+        st.metric("Riesgo por operación", f"{best.risk_per_trade_pct:.2f}%", border=True)
+        st.metric("Combinaciones evaluadas", len(result.trials), border=True)
+    trial_frame = pd.DataFrame(
+        [
+            {
+                "Umbral": item.minimum_probability,
+                "Stop ATR": item.stop_atr_multiple,
+                "Riesgo": item.risk_per_trade_pct / 100,
+                "Trades": item.trades,
+                "Compras ganadoras": item.long_wins,
+                "Ventas ganadoras": item.short_wins,
+                "Acierto": item.win_rate,
+                "Profit factor": item.profit_factor,
+                "Drawdown": item.maximum_drawdown_pct / 100,
+                "Brier": item.brier_score,
+                "Puntaje objetivo": item.objective_score,
+            }
+            for item in result.trials
+        ]
     )
+    st.dataframe(
+        trial_frame,
+        hide_index=True,
+        key="backtest_optimization_trials",
+        column_config={
+            "Umbral": st.column_config.NumberColumn(format="percent"),
+            "Riesgo": st.column_config.NumberColumn(format="percent"),
+            "Acierto": st.column_config.NumberColumn(format="percent"),
+            "Drawdown": st.column_config.NumberColumn(format="percent"),
+            "Profit factor": st.column_config.NumberColumn(format="%.2f"),
+            "Brier": st.column_config.NumberColumn(format="%.3f"),
+            "Puntaje objetivo": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+    st.caption(
+        "La tabla ordena la validación interna del entrenamiento. El resultado inferior "
+        "se calcula después sobre el tramo OOS que la búsqueda nunca vio."
+    )
+
+
+def backtesting_page(
+    repository: PortfolioRepository,
+    fx_quote: FxQuote | None,
+    *,
+    embedded: bool = False,
+) -> None:
+    if not embedded:
+        page_intro(
+            "Calibración estadística y backtesting",
+            "Validación fuera de muestra del motor Fase 4 con costos, ATR y veto de capital.",
+        )
+    else:
+        st.header("Calibración estadística y backtesting", anchor=False)
+        st.caption(
+            "Optimización de umbral, stop ATR y riesgo con validación fuera de muestra."
+        )
     st.warning(
         "El tramo de validación nunca calibra el modelo. Un resultado aprobado describe "
         "el histórico probado; no garantiza rendimiento futuro."
@@ -1852,13 +2206,13 @@ def backtesting_page(
             help="Precargado desde las aportaciones netas del libro contable.",
         )
         first, second, third = st.columns(3)
-        stop_multiple = first.slider("Stop ATR(14)", 2.0, 2.5, 2.25, 0.05)
+        stop_multiple = first.slider("Stop ATR de referencia", 2.0, 2.5, 2.25, 0.05)
         reward_risk = second.slider("Objetivo riesgo/beneficio", 1.5, 3.0, 2.0, 0.25)
         holding_sessions = third.number_input(
             "Máximo de sesiones", min_value=2, max_value=30, value=10, step=1
         )
         first, second, third = st.columns(3)
-        risk_pct = first.slider("Riesgo por operación", 0.25, 2.0, 1.0, 0.25, format="%.2f%%")
+        risk_pct = first.slider("Riesgo de referencia", 0.25, 2.0, 1.0, 0.25, format="%.2f%%")
         commission_bps = second.number_input(
             "Comisión por lado (bps)", min_value=0.0, max_value=100.0,
             value=float(round(ledger_commission_bps, 2)), step=1.0,
@@ -1869,8 +2223,13 @@ def backtesting_page(
             value=5.0, step=1.0,
         )
         minimum_probability = st.slider(
-            "Probabilidad calibrada mínima para aceptar un setup",
+            "Umbral de referencia",
             0.50, 0.75, 0.55, 0.01, format="%.0f%%",
+        )
+        search_mode = st.selectbox(
+            "Profundidad de búsqueda automática",
+            ["Rápida · 8 combinaciones", "Amplia · 18 combinaciones"],
+            help="La búsqueda amplia tarda más, pero explora una rejilla mayor sin tocar el OOS final.",
         )
         submitted = st.form_submit_button(
             "Ejecutar y registrar backtest",
@@ -1910,15 +2269,27 @@ def backtesting_page(
                             failures.append(str(exc))
                 if failures:
                     raise QuantMarketDataError(" ".join(failures))
-                batch = run_backtest_batch(
-                    frames, config, starting_capital_usd=float(starting_capital)
+                optimization = optimize_backtest_parameters(
+                    frames,
+                    config,
+                    starting_capital_usd=float(starting_capital),
+                    probability_grid=(0.52, 0.57)
+                    if search_mode.startswith("Rápida")
+                    else (0.50, 0.55, 0.60),
+                    atr_grid=(2.0, 2.25)
+                    if search_mode.startswith("Rápida")
+                    else (2.0, 2.25, 2.5),
+                    risk_grid=(0.50, 1.00),
                 )
+                batch = optimization.final_oos
                 payload = batch_to_payload(batch)
                 parameters = {
-                    **asdict(config),
+                    **asdict(optimization.best_config),
                     "period": period,
                     "account_reference_usd": float(starting_capital),
                     "fx_usd_mxn": float(fx_quote.rate) if fx_quote else None,
+                    "optimization_trials": len(optimization.trials),
+                    "search_mode": search_mode,
                 }
                 run_id = repository.record_backtest_run(
                     engine_version=batch.engine_version,
@@ -1938,10 +2309,14 @@ def backtesting_page(
                     expanded=False,
                 )
             st.session_state["latest_backtest_batch"] = batch
+            st.session_state["latest_backtest_optimization"] = optimization
             st.toast(f"Backtest #{run_id} registrado", icon=":material/verified:")
         except (QuantMarketDataError, ValueError) as exc:
             st.error(str(exc))
 
+    optimization = st.session_state.get("latest_backtest_optimization")
+    if isinstance(optimization, BacktestOptimizationResult):
+        _render_optimization_result(optimization)
     batch = st.session_state.get("latest_backtest_batch")
     if isinstance(batch, BacktestBatchResult):
         _render_backtest_result(batch)
@@ -2188,10 +2563,6 @@ def show_probability_predictor() -> None:
     probability_predictor_page()
 
 
-def show_backtesting() -> None:
-    backtesting_page(repository, fx_quote)
-
-
 def show_audit() -> None:
     audit_page(repository)
 
@@ -2214,11 +2585,6 @@ pages = [
         show_probability_predictor,
         title="Predictor de probabilidades",
         icon=":material/neurology:",
-    ),
-    st.Page(
-        show_backtesting,
-        title="Backtesting estadístico",
-        icon=":material/science:",
     ),
     st.Page(show_audit, title="Auditoría", icon=":material/fact_check:"),
     st.Page(

@@ -9,6 +9,7 @@ from portfolio_tracker.analytics.backtesting import (
     batch_to_payload,
     evaluate_capital_preservation,
     payload_sha256,
+    optimize_backtest_parameters,
     run_backtest_batch,
     run_symbol_backtest,
 )
@@ -116,3 +117,27 @@ def test_batch_payload_is_deterministic_and_hashable() -> None:
     assert payload == batch_to_payload(batch)
     assert len(payload_sha256(payload)) == 64
     assert len(batch.results) == 2
+
+
+def test_optimizer_freezes_winner_before_final_out_of_sample() -> None:
+    frame = synthetic_ohlcv(periods=1_000, seed=21)
+    base = BacktestConfig(training_fraction=0.70, minimum_probability=0.55)
+    result = optimize_backtest_parameters(
+        {"TEST": frame},
+        base,
+        starting_capital_usd=10_000,
+        probability_grid=(0.52, 0.58),
+        atr_grid=(2.0,),
+        risk_grid=(0.5,),
+    )
+
+    assert len(result.trials) == 2
+    assert result.best_config.minimum_probability in (0.52, 0.58)
+    assert result.best_config.training_fraction == base.training_fraction
+    assert result.final_oos.config == result.best_config
+    split = pd.Timestamp(result.final_oos.results[0].split_date)
+    assert frame.index[650] < split < frame.index[750]
+    assert all(
+        pd.Timestamp(trade.signal_date) >= split
+        for trade in result.final_oos.results[0].validation_trades
+    )
