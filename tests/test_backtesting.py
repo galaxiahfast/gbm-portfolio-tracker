@@ -10,6 +10,7 @@ from portfolio_tracker.analytics.backtesting import (
     evaluate_capital_preservation,
     payload_sha256,
     optimize_backtest_parameters,
+    iter_candidate_batches,
     run_backtest_batch,
     run_symbol_backtest,
 )
@@ -141,3 +142,35 @@ def test_optimizer_freezes_winner_before_final_out_of_sample() -> None:
         pd.Timestamp(trade.signal_date) >= split
         for trade in result.final_oos.results[0].validation_trades
     )
+
+
+def test_walk_forward_regimes_and_net_benchmarks_are_reported() -> None:
+    result = run_symbol_backtest(
+        "TEST",
+        synthetic_ohlcv(periods=1_600, seed=33),
+        BacktestConfig(minimum_probability=0.50),
+        starting_capital_usd=10_000,
+    )
+
+    assert len(result.walk_forward_folds) >= 3
+    assert [fold.calibration_samples for fold in result.walk_forward_folds] == sorted(
+        fold.calibration_samples for fold in result.walk_forward_folds
+    )
+    assert {name for name, _ in result.regime_metrics} == {
+        "ALCISTA", "BAJISTA", "ALTA_VOLATILIDAD", "LATERAL"
+    }
+    assert result.benchmarks is not None
+    assert math.isfinite(result.benchmarks.buy_hold_net_return_pct)
+    assert math.isclose(
+        result.benchmarks.bot_excess_vs_buy_hold_pct,
+        result.validation.net_return_pct - result.benchmarks.buy_hold_net_return_pct,
+        abs_tol=1e-4,
+    )
+
+
+def test_massive_signal_batches_keep_a_bounded_working_set() -> None:
+    candidates = list(range(2_505))
+    batches = list(iter_candidate_batches(candidates, 1_000))  # type: ignore[arg-type]
+
+    assert [len(batch) for batch in batches] == [1_000, 1_000, 505]
+    assert [item for batch in batches for item in batch] == candidates

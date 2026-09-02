@@ -8,7 +8,7 @@ puedan auditar exactamente por que fue aceptada o descartada.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from itertools import combinations
 import math
@@ -94,6 +94,33 @@ class PatternInfluence:
     detail: str
     veto: bool
     veto_reason: str
+
+
+def _as_utc_timestamp(value: object) -> pd.Timestamp:
+    """Devuelve una marca temporal comparable sin alterar el instante original.
+
+    Yahoo Finance entrega normalmente velas intradia con zona horaria, mientras
+    que sus velas diarias suelen usar fechas sin zona. Para el contrato combinado
+    tratamos las fechas sin zona como UTC y convertimos las conscientes a UTC.
+    Esto evita comparar directamente ``Timestamp`` tz-naive con tz-aware.
+    """
+
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize("UTC")
+    return timestamp.tz_convert("UTC")
+
+
+def _with_utc_timestamps(pattern: ChartPattern) -> ChartPattern:
+    """Canoniza las fechas de un patron al cruzar marcos temporales."""
+
+    return replace(
+        pattern,
+        pivot_timestamps=tuple(
+            _as_utc_timestamp(timestamp) for timestamp in pattern.pivot_timestamps
+        ),
+        detected_at=_as_utc_timestamp(pattern.detected_at),
+    )
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -636,9 +663,12 @@ def scan_multi_timeframe_patterns(
 ) -> tuple[ChartPattern, ...]:
     """Analiza 5 minutos y diario manteniendo un único orden auditable."""
 
-    combined = detect_chart_patterns(intraday, timeframe="5m") + detect_chart_patterns(
+    raw_patterns = detect_chart_patterns(
+        intraday, timeframe="5m"
+    ) + detect_chart_patterns(
         daily, timeframe="1D"
     )
+    combined = tuple(_with_utc_timestamps(pattern) for pattern in raw_patterns)
     return tuple(
         sorted(
             combined,

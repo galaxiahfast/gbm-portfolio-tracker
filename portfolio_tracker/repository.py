@@ -705,6 +705,48 @@ class PortfolioRepository:
             "adaptive_threshold": adaptive_threshold,
         }
 
+    def live_model_calibration_samples(
+        self,
+        symbol: str,
+        *,
+        horizon_minutes: int = 390,
+        limit: int = 2_000,
+    ) -> tuple[tuple[float, int], ...]:
+        """Entrega solo observaciones resueltas para calibración causal."""
+
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM live_model_observations
+                WHERE symbol = ? AND horizon_minutes = ?
+                  AND resolved_at IS NOT NULL AND outcome_up IS NOT NULL
+                ORDER BY resolved_at DESC, id DESC LIMIT ?
+                """,
+                (
+                    symbol.strip().upper(),
+                    int(horizon_minutes),
+                    max(1, min(int(limit), 10_000)),
+                ),
+            ).fetchall()
+        valid_samples: list[tuple[float, int]] = []
+        for row in rows:
+            canonical = self._live_observation_payload(
+                symbol=str(row["symbol"]),
+                observed_at=str(row["observed_at"]),
+                horizon_minutes=int(row["horizon_minutes"]),
+                reference_price=str(row["reference_price"]),
+                raw_probability_up=str(row["raw_probability_up"]),
+                predicted_direction=str(row["predicted_direction"]),
+                parameters_json=str(row["parameters_json"]),
+            )
+            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            if digest == str(row["observation_sha256"]):
+                valid_samples.append(
+                    (float(row["raw_probability_up"]), int(row["outcome_up"]))
+                )
+        return tuple(valid_samples)
+
     def verify_live_model_observations(self) -> tuple[int, tuple[int, ...]]:
         with self.database.connect() as connection:
             rows = connection.execute(

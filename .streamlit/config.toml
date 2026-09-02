@@ -3,42 +3,43 @@ maxUploadSize = 12
 
 [theme]
 base = "dark"
-primaryColor = "#60A5FA"
-backgroundColor = "#0F172A"
-secondaryBackgroundColor = "#1E293B"
-codeBackgroundColor = "#1E293B"
-textColor = "#F1F5F9"
-linkColor = "#60A5FA"
-borderColor = "#334155"
-codeTextColor = "#CBD5E1"
+primaryColor = "#F2F2F2"
+backgroundColor = "#080808"
+secondaryBackgroundColor = "#111111"
+codeBackgroundColor = "#0D0D0D"
+textColor = "#F7F7F7"
+linkColor = "#D4D4D4"
+borderColor = "#292929"
+codeTextColor = "#D0D0D0"
 showWidgetBorder = true
 showSidebarBorder = true
-baseRadius = "6px"
+baseRadius = "8px"
 buttonRadius = "6px"
-font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&display=swap"
 codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
 baseFontSize = 14
 baseFontWeight = 400
 codeFontSize = "13px"
-headingFontSizes = ["28px", "22px", "18px", "16px", "14px", "12px"]
-headingFontWeights = [700, 600, 600, 600, 500, 500]
+headingFontSizes = ["28px", "21px", "17px", "15px", "13px", "12px"]
+headingFontWeights = [600, 600, 600, 500, 500, 500]
 linkUnderline = false
-greenColor = "#34D399"
-redColor = "#F87171"
-yellowColor = "#FBBF24"
-orangeColor = "#FB923C"
-blueColor = "#60A5FA"
-violetColor = "#A78BFA"
-grayColor = "#94A3B8"
-chartCategoricalColors = ["#60A5FA", "#34D399", "#A78BFA", "#F87171", "#FBBF24", "#38BDF8", "#94A3B8", "#FB923C"]
-dataframeBorderColor = "#334155"
-dataframeHeaderBackgroundColor = "#1E293B"
+greenColor = "#D9D9D9"
+redColor = "#A3A3A3"
+yellowColor = "#BDBDBD"
+orangeColor = "#B0B0B0"
+blueColor = "#E5E5E5"
+violetColor = "#8F8F8F"
+grayColor = "#808080"
+chartCategoricalColors = ["#F2F2F2", "#CFCFCF", "#AAAAAA", "#888888", "#666666", "#4D4D4D", "#BBBBBB", "#777777"]
+chartSequentialColors = ["#111111", "#1B1B1B", "#262626", "#333333", "#444444", "#5A5A5A", "#737373", "#949494", "#BDBDBD", "#E5E5E5"]
+dataframeBorderColor = "#292929"
+dataframeHeaderBackgroundColor = "#151515"
 
 [theme.sidebar]
-backgroundColor = "#0F172A"
-secondaryBackgroundColor = "#1E293B"
-codeBackgroundColor = "#1E293B"
-textColor = "#F1F5F9"
-borderColor = "#334155"
-primaryColor = "#60A5FA"
+backgroundColor = "#050505"
+secondaryBackgroundColor = "#101010"
+codeBackgroundColor = "#0B0B0B"
+textColor = "#E8E8E8"
+borderColor = "#242424"
+primaryColor = "#E5E5E5"

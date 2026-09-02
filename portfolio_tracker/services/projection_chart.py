@@ -29,6 +29,44 @@ HORIZON_ORDER = (
 PROJECTION_DAYS = 15
 
 
+def _bounded_projected_ohlc(
+    open_price: float,
+    expected_close: float,
+    proposed_floor: float,
+    proposed_ceiling: float,
+    atr_value: float,
+) -> tuple[float, float, float, float]:
+    """Defensa visual: limita cuerpo y mechas sin alterar la dirección prevista."""
+
+    atr = max(float(atr_value), float(open_price) * 0.001, 0.01)
+    body_cap = 0.85 * atr
+    close_price = max(
+        0.01,
+        min(open_price + body_cap, max(open_price - body_cap, expected_close)),
+    )
+    body_low, body_high = sorted((open_price, close_price))
+    maximum_range = 1.35 * atr
+    available_wicks = max(0.12 * atr, maximum_range - (body_high - body_low))
+    desired_lower = max(0.0, body_low - proposed_floor)
+    desired_upper = max(0.0, proposed_ceiling - body_high)
+    desired_total = desired_lower + desired_upper
+    if desired_total <= 1e-12:
+        lower_wick = upper_wick = available_wicks / 2
+    else:
+        scale = min(1.0, available_wicks / desired_total)
+        lower_wick = desired_lower * scale
+        upper_wick = desired_upper * scale
+        unused = available_wicks - lower_wick - upper_wick
+        lower_wick += unused / 2
+        upper_wick += unused / 2
+    return (
+        float(open_price),
+        float(close_price),
+        max(0.01, body_low - lower_wick),
+        body_high + upper_wick,
+    )
+
+
 def ordered_horizon_projections(
     projections: Sequence["HorizonProjection"],
 ) -> tuple["HorizonProjection", ...]:
@@ -76,18 +114,24 @@ def build_15_day_projection_figure(
 
     ordered = ordered_daily_projection(points)
     projection_dates = [item.session_date for item in ordered]
-    expected = [item.expected_close for item in ordered]
-    floors = [item.daily_floor for item in ordered]
-    ceilings = [item.daily_ceiling for item in ordered]
-    opens = [current_price, *expected[:-1]]
-    highs = [
-        max(open_price, close_price, ceiling)
-        for open_price, close_price, ceiling in zip(opens, expected, ceilings)
-    ]
-    lows = [
-        min(open_price, close_price, floor)
-        for open_price, close_price, floor in zip(opens, expected, floors)
-    ]
+    opens: list[float] = []
+    expected: list[float] = []
+    lows: list[float] = []
+    highs: list[float] = []
+    projected_open = float(current_price)
+    for item in ordered:
+        open_price, close_price, low_price, high_price = _bounded_projected_ohlc(
+            projected_open,
+            item.expected_close,
+            item.daily_floor,
+            item.daily_ceiling,
+            item.atr_value,
+        )
+        opens.append(open_price)
+        expected.append(close_price)
+        lows.append(low_price)
+        highs.append(high_price)
+        projected_open = close_price
     if historical_daily is None or historical_daily.empty:
         raise ValueError("Se requieren velas históricas para enlazar la proyección.")
     required = ("Open", "High", "Low", "Close")
@@ -113,6 +157,9 @@ def build_15_day_projection_figure(
     history_dates = list(history.index)
     if pd.Timestamp(history_dates[-1]).date() >= projection_dates[0]:
         raise ValueError("La proyección debe comenzar después del último dato histórico.")
+    visible_low = min(float(history["Low"].min()), min(lows))
+    visible_high = max(float(history["High"].max()), max(highs))
+    visible_padding = max((visible_high - visible_low) * 0.06, current_price * 0.002)
 
     figure = go.Figure()
     figure.add_trace(
@@ -122,8 +169,8 @@ def build_15_day_projection_figure(
             high=history["High"],
             low=history["Low"],
             close=history["Close"],
-            increasing={"line": {"color": "#10B981"}, "fillcolor": "#10B981"},
-            decreasing={"line": {"color": "#F43F5E"}, "fillcolor": "#F43F5E"},
+            increasing={"line": {"color": "#E5E5E5"}, "fillcolor": "#D6D6D6"},
+            decreasing={"line": {"color": "#737373"}, "fillcolor": "#5F5F5F"},
             name="Histórico real · 30 sesiones",
             hovertext=["Sesión observada"] * len(history),
         )
@@ -135,8 +182,8 @@ def build_15_day_projection_figure(
             high=highs,
             low=lows,
             close=expected,
-            increasing={"line": {"color": "#22C55E"}, "fillcolor": "#22C55E"},
-            decreasing={"line": {"color": "#EF4444"}, "fillcolor": "#EF4444"},
+            increasing={"line": {"color": "#FFFFFF"}, "fillcolor": "#ECECEC"},
+            decreasing={"line": {"color": "#A3A3A3"}, "fillcolor": "#858585"},
             name="Velas proyectadas",
             customdata=[item.day_number for item in ordered],
             hovertext=[
@@ -150,7 +197,25 @@ def build_15_day_projection_figure(
         height=430,
         margin={"l": 20, "r": 20, "t": 16, "b": 22},
         hovermode="x unified",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={
+            "family": "Inter, sans-serif",
+            "color": "#C8C8C8",
+            "size": 11,
+        },
+        hoverlabel={
+            "bgcolor": "rgba(10,10,10,.96)",
+            "bordercolor": "rgba(190,190,190,.28)",
+            "font": {"color": "#F5F5F5"},
+        },
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "x": 0,
+            "font": {"color": "#A0A0A0", "size": 10},
+        },
         xaxis={
             "title": None,
             "type": "date",
@@ -159,20 +224,26 @@ def build_15_day_projection_figure(
             "rangebreaks": [{"bounds": ["sat", "mon"]}],
             "showgrid": False,
             "rangeslider": {"visible": False},
+            "tickfont": {"color": "#777777", "size": 10},
         },
         yaxis={
             "title": "Precio histórico y proyectado (USD)",
             "tickprefix": "$",
             "tickformat": ",.2f",
-            "gridcolor": "rgba(148, 163, 184, 0.18)",
+            "gridcolor": "rgba(170, 170, 170, 0.10)",
             "zeroline": False,
+            "tickfont": {"color": "#858585", "size": 10},
+            "range": [
+                max(0.0, visible_low - visible_padding),
+                visible_high + visible_padding,
+            ],
         },
     )
     figure.add_vline(
         x=boundary,
         line_width=1.5,
         line_dash="dash",
-        line_color="#F59E0B",
+        line_color="#BDBDBD",
         annotation_text="Inicio de proyección",
         annotation_position="top right",
     )

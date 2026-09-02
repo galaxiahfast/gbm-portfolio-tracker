@@ -189,6 +189,24 @@ def test_multi_timeframe_scan_keeps_5m_and_daily_contracts() -> None:
     assert any(item.valid for item in patterns if item.timeframe == "1D")
 
 
+def test_multi_timeframe_scan_normalizes_mixed_timezone_timestamps() -> None:
+    intraday = _double_bottom_frame()
+    intraday.index = intraday.index.tz_localize("America/New_York")
+    daily = _double_top_frame().copy()
+    daily.index = pd.date_range("2025-01-01", periods=len(daily), freq="B")
+
+    patterns = scan_multi_timeframe_patterns(intraday, daily)
+
+    assert patterns
+    assert all(item.detected_at.tzinfo is not None for item in patterns)
+    assert all(str(item.detected_at.tzinfo) == "UTC" for item in patterns)
+    assert all(
+        timestamp.tzinfo is not None
+        for item in patterns
+        for timestamp in item.pivot_timestamps
+    )
+
+
 def test_real_smci_daily_snapshot_is_processed_without_optimistic_defaults() -> None:
     fixture = Path(__file__).parent / "fixtures" / "smci_daily_2026_sample.csv"
     frame = pd.read_csv(fixture, parse_dates=["Date"], index_col="Date")

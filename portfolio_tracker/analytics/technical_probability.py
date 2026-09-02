@@ -209,6 +209,51 @@ class ProbabilityAnalysis:
     fundamental_risk_veto: bool = False
     fundamental_snapshot_sha256: str = ""
     fundamental_as_of: str = ""
+    raw_probability_up: float = 50.0
+    probability_status: str = "Score heurístico preliminar"
+    calibration_samples: int = 0
+    calibration_brier_score: float | None = None
+    event_risk_level: str = "BAJO"
+    event_risk_window_until: str = ""
+    fundamental_news_audit: tuple[str, ...] = ()
+    market_regime: str = "SIN CLASIFICAR"
+    position_size_policy: str = "CONDICIONAL"
+
+    @property
+    def has_empirical_probability(self) -> bool:
+        """Solo permite nomenclatura probabilística con evidencia OOS amplia."""
+
+        return bool(
+            self.probability_status == "Probabilidad empíricamente calibrada"
+            and self.calibration_samples >= 500
+            and self.calibration_brier_score is not None
+            and math.isfinite(self.calibration_brier_score)
+        )
+
+    @property
+    def bullish_display_label(self) -> str:
+        return (
+            "Probabilidad empírica de subida"
+            if self.has_empirical_probability
+            else "Score heurístico alcista"
+        )
+
+    @property
+    def bearish_display_label(self) -> str:
+        return (
+            "Probabilidad empírica de bajada"
+            if self.has_empirical_probability
+            else "Score heurístico bajista"
+        )
+
+    @property
+    def calibration_disclosure(self) -> str:
+        if self.has_empirical_probability:
+            return (
+                f"Calibración empírica OOS · n={self.calibration_samples} · "
+                f"Brier {self.calibration_brier_score:.3f}"
+            )
+        return "Pendiente de calibración empírica Brier"
 
 
 def validate_probability_analysis(analysis: ProbabilityAnalysis) -> None:
@@ -968,6 +1013,21 @@ def analyze_probability(
     tactical_short, exposure_factor, required_volume_ratio = (
         _monthly_execution_policy(planned_direction, monthly_trend)
     )
+    ema_regime_aligned = (
+        ema9 > ema21
+        if planned_direction == "LONG"
+        else ema9 < ema21
+    )
+    macd_regime_aligned = (
+        macd_state_5m is MomentumState.BULLISH
+        if planned_direction == "LONG"
+        else macd_state_5m is MomentumState.BEARISH
+    )
+    trend_regime_confirmed = adx > 25 and ema_regime_aligned and macd_regime_aligned
+    if adx < 20:
+        exposure_factor = min(exposure_factor, 0.25)
+    elif not trend_regime_confirmed:
+        exposure_factor = min(exposure_factor, 0.50)
     valid_resistances = sorted(
         level for level in resistance_candidates if level >= price - atr_5m
     )
@@ -980,25 +1040,27 @@ def analyze_probability(
         activation_trigger = (
             f"Activar LONG solo si %K cruza sobre %D desde <20, el cierre 5m mantiene "
             f"el soporte ${nearest_support:.2f}, MACD 5m deja de ser bajista y volumen "
-            f"> SMA20 (ratio > {required_volume_ratio:.2f}x)."
+            f"> SMA20 (ratio > {required_volume_ratio:.2f}x), con ADX >25 y EMA9 > EMA21."
         )
         activation_trigger_met = (
             signal is TechnicalSignal.BUY
             and rebound_watch_active
             and macd_state_5m is not MomentumState.BEARISH
             and volume_ratio > required_volume_ratio
+            and trend_regime_confirmed
         )
     else:
         activation_trigger = (
             f"Activar SHORT solo si un cierre 5m rompe el soporte ${nearest_support:.2f}, "
             f"MACD 5m permanece bajista y volumen > SMA20 "
-            f"(ratio > {required_volume_ratio:.2f}x)."
+            f"(ratio > {required_volume_ratio:.2f}x), con ADX >25 y EMA9 < EMA21."
         )
         activation_trigger_met = (
             signal is TechnicalSignal.SELL
             and price < nearest_support
             and macd_state_5m is MomentumState.BEARISH
             and volume_ratio > required_volume_ratio
+            and trend_regime_confirmed
         )
     decision = strict_confluence_gate(
         probability_up,
@@ -1117,6 +1179,7 @@ def analyze_probability(
         f"Vigilancia de rebote: {'ACTIVA' if rebound_watch_active else 'INACTIVA'}; soporte más cercano ${nearest_support:.2f}.",
         f"Detonante {'CUMPLIDO' if activation_trigger_met else 'PENDIENTE'}: {activation_trigger}",
         f"Exposición relativa {exposure_factor:.2f}x; SHORT táctico mensual: {'SÍ' if tactical_short else 'NO'}.",
+        f"Régimen central: {'TENDENCIA CONFIRMADA' if trend_regime_confirmed else 'LATERAL' if adx < 20 else 'TRANSICIÓN'}; ADX {adx:.1f}, EMA y MACD {'alineados' if ema_regime_aligned and macd_regime_aligned else 'sin alineación completa'}.",
         f"MACD 5 min {float(latest['MACD']):.3f} vs señal {float(latest['MACD_signal']):.3f} ({macd_state_5m.value}).",
         f"MACD diario {float(daily_latest['MACD']):.3f} vs señal {float(daily_latest['MACD_signal']):.3f} ({macd_state_daily.value}).",
         f"VWAP {vwap:.2f}; precio {price_vs_vwap_pct:+.2f}% respecto a la sesión.",
@@ -1154,7 +1217,7 @@ def analyze_probability(
         fibonacci=fibonacci, ichimoku_5m=ichimoku_5m, ichimoku_daily=ichimoku_daily, tenkan_5m=float(latest["Ichimoku_Tenkan"]), kijun_5m=float(latest["Ichimoku_Kijun"]), cloud_upper_5m=cloud_upper_5m, cloud_lower_5m=cloud_lower_5m,
         tenkan_daily=float(daily_latest["Ichimoku_Tenkan"]), kijun_daily=float(daily_latest["Ichimoku_Kijun"]), cloud_upper_daily=cloud_upper_daily, cloud_lower_daily=cloud_lower_daily, candle_pattern=candle_pattern, candle_detail=candle_detail,
         weekly_trend=weekly_trend, monthly_trend=monthly_trend, weekly_support=weekly_support, weekly_resistance=weekly_resistance, annual_fibonacci=annual_fibonacci, liquidity_zones=liquidity_zones, operation_probability=decision.operation_probability, risk_veto=decision.risk_veto, risk_alert=decision.alert, risk_reasons=decision.reasons, scenario=decision.scenario, overextended_unconfirmed=overextended_unconfirmed,
-        signal_rejected=rejected or decision.risk_veto, score_breakdown=breakdown, pivots=pivots, suggested_level=suggested_level, verdict=verdict, observations=observations, warnings=tuple(warnings), intraday_indicators=intraday_indicators, hourly_indicators=hourly_indicators, daily_indicators=daily_indicators, weekly_indicators=weekly_indicators, monthly_indicators=monthly_indicators, chart_patterns=chart_patterns, chart_pattern_impact=pattern_influence.impact_points, chart_pattern_veto=pattern_influence.veto, horizon_projections=horizon_projections, execution_levels=execution_levels, daily_projection=daily_projection,
+        signal_rejected=rejected or decision.risk_veto, score_breakdown=breakdown, pivots=pivots, suggested_level=suggested_level, verdict=verdict, observations=observations, warnings=tuple(warnings), intraday_indicators=intraday_indicators, hourly_indicators=hourly_indicators, daily_indicators=daily_indicators, weekly_indicators=weekly_indicators, monthly_indicators=monthly_indicators, chart_patterns=chart_patterns, chart_pattern_impact=pattern_influence.impact_points, chart_pattern_veto=pattern_influence.veto, horizon_projections=horizon_projections, execution_levels=execution_levels, daily_projection=daily_projection, raw_probability_up=probability_up, market_regime=("TENDENCIA CONFIRMADA" if trend_regime_confirmed else "RANGO / VETO" if adx < 20 else "TRANSICIÓN"), position_size_policy=("NORMAL" if trend_regime_confirmed else "REDUCIDA 25%" if adx < 20 else "REDUCIDA 50% / ESPERAR"),
     )
     validate_probability_analysis(analysis)
     return analysis

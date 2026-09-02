@@ -166,3 +166,4 @@ def test_live_model_feedback_is_unique_resolved_and_hash_audited(tmp_path) -> No
     assert 0.52 <= stats["adaptive_threshold"] <= 0.65
     assert valid == 1
     assert invalid == ()
+    assert repository.live_model_calibration_samples("SMCI") == ((0.62, 1),)

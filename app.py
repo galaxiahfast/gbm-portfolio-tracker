@@ -33,6 +33,7 @@ from portfolio_tracker.analytics.fundamental_news import (
     snapshot_from_payload,
     snapshot_to_payload,
 )
+from portfolio_tracker.analytics.probability_calibration import calibrate_probability
 from portfolio_tracker.analytics.risk import concentration_warnings
 from portfolio_tracker.analytics.multi_timeframe import MacroTrend
 from portfolio_tracker.analytics.technical_probability import (
@@ -86,6 +87,7 @@ from portfolio_tracker.services.quant_market_data import (
 )
 from portfolio_tracker.services.receipt_storage import ReceiptStorage
 from portfolio_tracker.services.validation import validate_trade
+from portfolio_tracker.ui import apply_premium_ui, premium_bar_chart, premium_line_chart
 
 
 st.set_page_config(
@@ -94,6 +96,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+apply_premium_ui()
 
 
 @st.cache_resource
@@ -245,8 +248,10 @@ def local_datetime(value: str) -> datetime:
 
 
 def page_intro(title: str, description: str) -> None:
-    st.title(title, anchor=False)
-    st.caption(description)
+    with st.container(key="page_header"):
+        st.markdown(":material/monitoring:  GBM+ · PORTFOLIO INTELLIGENCE")
+        st.title(title, anchor=False)
+        st.caption(description)
 
 
 def show_market_notice() -> None:
@@ -617,7 +622,7 @@ def dashboard(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None
                 "Emisora": [item.symbol for item in summary.positions],
                 "Valor USD": [float(item.market_value_usd) for item in summary.positions],
             }).set_index("Emisora")
-            st.bar_chart(allocation, color="#60A5FA", height=300)
+            premium_bar_chart(allocation, height=300, key="portfolio_allocation")
         else:
             st.info("Sin distribución disponible.")
 
@@ -631,7 +636,7 @@ def dashboard(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None
                 "Efectivo": [float(row["cash_usd"]) for row in snapshots],
                 "Posiciones": [float(row["holdings_value_usd"]) for row in snapshots],
             }).set_index("Fecha")
-            st.line_chart(history, height=320)
+            premium_line_chart(history, height=320, key="portfolio_history")
         else:
             st.info("La serie crecerá conforme se registren nuevas valuaciones.")
 
@@ -980,7 +985,7 @@ def _render_probability_executive(
     ):
         decision_label = "ESPERAR · UMBRAL ONLINE NO ALCANZADO"
         decision_rationale = (
-            f"El gatillo técnico existe, pero {analysis.operation_probability:.1f}% "
+            f"El gatillo técnico existe, pero el score {analysis.operation_probability:.1f}/100 "
             f"no supera el umbral adaptativo de {adaptive_probability_threshold:.1%}."
         )
         decision_tone = "warning"
@@ -1004,6 +1009,11 @@ def _render_probability_executive(
         st.error(message)
     else:
         st.warning(message)
+    score_suffix = "%" if analysis.has_empirical_probability else "/100"
+    st.caption(
+        f"{analysis.bullish_display_label}: {analysis.probability_up:.1f}{score_suffix} "
+        f"({analysis.calibration_disclosure})."
+    )
 
     with st.container(border=True):
         st.markdown("**Detonante cuantitativo de activación**")
@@ -1048,9 +1058,8 @@ def _render_probability_executive(
             border=True,
             icon=":material/looks_one:",
             help=(
-                f"Alineado con {levels.pattern_target_label}."
-                if levels.pattern_target_applied
-                else "Objetivo técnico de corto plazo basado en ATR y estructura."
+                (f"Alineado con {levels.pattern_target_label}. " if levels.pattern_target_applied else "")
+                + f"R:R de TP1 = {levels.take_profit_1_reward_risk:.2f}R; mínimo {levels.minimum_reward_risk:.1f}R."
             ),
         )
         st.metric(
@@ -1063,13 +1072,22 @@ def _render_probability_executive(
     with st.container(horizontal=True):
         st.metric("Último precio", f"${analysis.last_price:,.2f}", border=True)
         st.metric(
-            "Confluencia operativa",
-            f"{analysis.operation_probability:.1f}%" if analysis.operation_probability else "Detonante pendiente",
+            "Score operativo",
+            f"{analysis.operation_probability:.1f}/100" if analysis.operation_probability else "Detonante pendiente",
             border=True,
+            help=(
+                f"{analysis.probability_status}. Muestra resuelta: "
+                f"{analysis.calibration_samples}; Brier: "
+                f"{analysis.calibration_brier_score:.3f}"
+                if analysis.calibration_brier_score is not None
+                else f"{analysis.probability_status}. Sin Brier validado todavía."
+            ),
         )
         st.metric(
             "Régimen 5 min",
-            "Rango / lateral" if analysis.range_market else "Tendencia activa",
+            analysis.market_regime,
+            delta=analysis.position_size_policy,
+            delta_color="inverse" if analysis.market_regime != "TENDENCIA CONFIRMADA" else "off",
             border=True,
         )
         st.metric(
@@ -1094,17 +1112,21 @@ def _render_probability_executive(
         [
             {
                 "Horizonte": item.label,
-                "P. subida": item.probability_up,
+                "Lectura alcista": item.probability_up,
                 "Objetivo alcista": item.bullish_target,
-                "P. rango": item.probability_range,
+                "Lectura lateral": item.probability_range,
                 "Rango esperado": f"${item.range_low:,.2f} - ${item.range_high:,.2f}",
-                "P. bajada": item.probability_down,
+                "Lectura bajista": item.probability_down,
                 "Objetivo bajista": item.bearish_target,
+                "Motor": item.engine_name,
+                "Estado": item.probability_status,
+                "Muestra": item.calibration_samples,
+                "Brier": item.brier_score,
             }
             for item in ordered_projections
         ]
     )
-    st.subheader("Mapa de probabilidades por horizonte", anchor=False)
+    st.subheader("Mapa de scores por horizonte", anchor=False)
     with st.container(horizontal=True, gap="small"):
         st.badge("Escenario alcista", icon=":material/trending_up:", color="green")
         st.badge("Escenario lateral", icon=":material/trending_flat:", color="blue")
@@ -1118,25 +1140,27 @@ def _render_probability_executive(
         key=f"executive_horizons_{analysis.symbol}",
         column_config={
             "Horizonte": st.column_config.TextColumn(pinned=True, width=92),
-            "P. subida": st.column_config.ProgressColumn(
-                "Prob. subida", format="%.1f%%", min_value=0, max_value=100,
+            "Lectura alcista": st.column_config.ProgressColumn(
+                "Score alcista", format="%.1f/100", min_value=0, max_value=100,
                 color="green", width=105,
             ),
             "Objetivo alcista": st.column_config.NumberColumn(
                 "Objetivo ↑", format="$%.2f", width=105,
             ),
-            "P. rango": st.column_config.ProgressColumn(
-                "Prob. rango", format="%.1f%%", min_value=0, max_value=100,
+            "Lectura lateral": st.column_config.ProgressColumn(
+                "Score lateral", format="%.1f/100", min_value=0, max_value=100,
                 color="blue", width=105,
             ),
             "Rango esperado": st.column_config.TextColumn(width=145),
-            "P. bajada": st.column_config.ProgressColumn(
-                "Prob. bajada", format="%.1f%%", min_value=0, max_value=100,
+            "Lectura bajista": st.column_config.ProgressColumn(
+                "Score bajista", format="%.1f/100", min_value=0, max_value=100,
                 color="red", width=105,
             ),
             "Objetivo bajista": st.column_config.NumberColumn(
                 "Objetivo ↓", format="$%.2f", width=105,
             ),
+            "Muestra": st.column_config.NumberColumn(format="%d"),
+            "Brier": st.column_config.NumberColumn(format="%.3f"),
         },
     )
 
@@ -1205,7 +1229,7 @@ def _render_fundamental_news(
             )
             st.metric(
                 "Eventos",
-                f"{snapshot.event_points:+.1f} pp",
+                snapshot.event_risk_level,
                 delta="Veto activo" if analysis.fundamental_risk_veto else "Sin veto",
                 delta_color="inverse" if analysis.fundamental_risk_veto else "off",
                 border=True,
@@ -1226,6 +1250,11 @@ def _render_fundamental_news(
             {"Métrica": "Crecimiento beneficios", "Valor": metrics.get("earnings_growth"), "Formato": "ratio"},
             {"Métrica": "Deuda/capital", "Valor": metrics.get("debt_to_equity"), "Formato": "number"},
             {"Métrica": "Flujo de caja libre", "Valor": metrics.get("free_cash_flow"), "Formato": "usd"},
+            {"Métrica": "Flujo operativo", "Valor": metrics.get("operating_cash_flow"), "Formato": "usd"},
+            {"Métrica": "Conversión beneficio/caja", "Valor": metrics.get("cash_conversion"), "Formato": "number"},
+            {"Métrica": "Margen de flujo libre", "Valor": metrics.get("fcf_margin"), "Formato": "ratio"},
+            {"Métrica": "Deuda neta", "Valor": metrics.get("net_debt"), "Formato": "usd"},
+            {"Métrica": "Cobertura de intereses", "Valor": metrics.get("interest_coverage"), "Formato": "number"},
             {"Métrica": "Ingresos trimestrales", "Valor": metrics.get("quarterly_revenue"), "Formato": "usd"},
             {"Métrica": "Beneficio trimestral", "Valor": metrics.get("quarterly_net_income"), "Formato": "usd"},
         ]
@@ -1274,6 +1303,8 @@ def _render_fundamental_news(
                             "Fuente": item.publisher,
                             "Temas": ", ".join(item.topics) or "General",
                             "Impacto": item.sentiment,
+                            "Peso recencia": item.recency_weight,
+                            "Clase": item.impact_class,
                             "Enlace": item.url or None,
                         }
                         for item in snapshot.news
@@ -1284,6 +1315,7 @@ def _render_fundamental_news(
                 column_config={
                     "Fecha": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
                     "Impacto": st.column_config.NumberColumn(format="%+.2f"),
+                    "Peso recencia": st.column_config.NumberColumn(format="%.3f"),
                     "Enlace": st.column_config.LinkColumn(display_text="Abrir fuente"),
                 },
             )
@@ -1372,12 +1404,12 @@ def _render_chart_patterns(
 
 def _probability_predictor_content(*, live_mode: bool) -> None:
     page_intro(
-        "Predictor de probabilidades · Fase 4",
-        "Motor multi-temporal con confluencia rigurosa y veto central de riesgo.",
+        "Motor cuantitativo · Fase 5",
+        "Scores multi-temporales, calibración empírica y veto central de riesgo.",
     )
     st.warning(
-        "Este porcentaje es un puntaje heurístico preliminar, no una probabilidad "
-        "calibrada ni una recomendación de compra o venta."
+        "Las lecturas se muestran como scores heurísticos sobre 100 mientras no exista "
+        "una muestra OOS masiva con Brier calibrado. No son probabilidades ni recomendaciones."
     )
     # El contenedor conserva esta posición aunque los bytes se generen después.
     # Así los cuatro botones quedan físicamente encima de st.tabs.
@@ -1483,19 +1515,104 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             fundamental_warning = f"El corte fundamental fue descartado: {exc}"
             fundamental_snapshot = None
 
+    horizon_minutes = {
+        "1 Hora": 60,
+        "6 Horas": 390,
+        "1 Día": 1_440,
+        "1 Semana": 10_080,
+        "1 Mes": 43_200,
+        "6 Meses": 181_440,
+    }
+    raw_probability_up = analysis.probability_up
+    raw_horizon_probabilities = {
+        horizon.label: horizon.probability_up
+        for horizon in analysis.horizon_projections
+    }
+    calibrated_horizons = []
+    for horizon in analysis.horizon_projections:
+        samples = repository.live_model_calibration_samples(
+            analysis.symbol,
+            horizon_minutes=horizon_minutes[horizon.label],
+        )
+        calibration = calibrate_probability(
+            horizon.probability_up / 100,
+            samples,
+        )
+        probability_range = horizon.probability_range
+        calibrated_up = min(
+            100.0 - probability_range,
+            calibration.calibrated_probability * 100,
+        )
+        calibrated_horizons.append(
+            replace(
+                horizon,
+                probability_up=round(calibrated_up, 1),
+                probability_down=round(100.0 - probability_range - calibrated_up, 1),
+                probability_status=calibration.status,
+                calibration_samples=calibration.sample_size,
+                brier_score=calibration.brier_score,
+            )
+        )
+    primary_calibration = calibrate_probability(
+        raw_probability_up / 100,
+        repository.live_model_calibration_samples(
+            analysis.symbol,
+            horizon_minutes=390,
+        ),
+    )
+    calibrated_probability_up = round(
+        primary_calibration.calibrated_probability * 100, 1
+    )
+    if primary_calibration.empirically_calibrated:
+        long_direction = analysis.execution_levels.direction == "LONG"
+        directional_probability = (
+            calibrated_probability_up
+            if long_direction
+            else 100.0 - calibrated_probability_up
+        )
+        operation_probability = (
+            min(analysis.operation_probability, directional_probability)
+            if analysis.risk_veto
+            else directional_probability
+        )
+    else:
+        operation_probability = analysis.operation_probability
+    analysis = replace(
+        analysis,
+        raw_probability_up=raw_probability_up,
+        probability_up=calibrated_probability_up,
+        probability_down=round(100.0 - calibrated_probability_up, 1),
+        operation_probability=round(operation_probability, 1),
+        horizon_projections=tuple(calibrated_horizons),
+        probability_status=primary_calibration.status,
+        calibration_samples=primary_calibration.sample_size,
+        calibration_brier_score=primary_calibration.brier_score,
+    )
+
     if live_mode:
         repository.resolve_live_model_observations(
             symbol=analysis.symbol,
             current_price=Decimal(str(analysis.last_price)),
             current_as_of=analysis.as_of,
         )
-        repository.record_live_model_observation(
-            symbol=analysis.symbol,
-            observed_at=analysis.as_of,
-            reference_price=Decimal(str(analysis.last_price)),
-            raw_probability_up=Decimal(str(analysis.probability_up / 100)),
-            parameters_json=json.dumps(calibrated_parameters, sort_keys=True),
-        )
+        for horizon in analysis.horizon_projections:
+            repository.record_live_model_observation(
+                symbol=analysis.symbol,
+                observed_at=analysis.as_of,
+                reference_price=Decimal(str(analysis.last_price)),
+                raw_probability_up=Decimal(
+                    str(raw_horizon_probabilities[horizon.label] / 100)
+                ),
+                parameters_json=json.dumps(
+                    {
+                        **calibrated_parameters,
+                        "engine": horizon.engine_name,
+                        "probability_status": horizon.probability_status,
+                    },
+                    sort_keys=True,
+                ),
+                horizon_minutes=horizon_minutes[horizon.label],
+            )
     online_stats = repository.live_model_stats(analysis.symbol)
 
     with st.container(border=True):
@@ -1512,6 +1629,15 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                 f"acierto {online_stats['accuracy']:.1%} · "
                 f"Brier {online_stats['brier_score']:.3f} · "
                 f"umbral adaptativo {online_stats['adaptive_threshold']:.1%}."
+            )
+            st.badge(
+                analysis.probability_status,
+                color=(
+                    "green"
+                    if analysis.probability_status.startswith("Probabilidad empíricamente")
+                    else "orange"
+                ),
+                icon=":material/science:",
             )
         if fundamental_warning:
             st.warning(fundamental_warning)
@@ -1635,8 +1761,8 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                     }[analysis.macd_state_5m],
                 )
                 st.badge(
-                    "Rango / lateral" if analysis.range_market else "Tendencia activa",
-                    color="orange" if analysis.range_market else "blue",
+                    analysis.market_regime,
+                    color="green" if analysis.market_regime == "TENDENCIA CONFIRMADA" else "red" if analysis.range_market else "orange",
                 )
                 st.badge(
                     f"Semanal: {macro_labels[analysis.weekly_trend]}",
@@ -1649,14 +1775,18 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
 
             with st.container(horizontal=True):
                 st.metric(
-                    "Probabilidad de subida",
-                    f"{analysis.probability_up:.1f}%",
+                    analysis.bullish_display_label,
+                    f"{analysis.probability_up:.1f}{'%' if analysis.has_empirical_probability else '/100'}",
+                    delta=analysis.calibration_disclosure,
+                    delta_color="off",
                     border=True,
                     icon=":material/trending_up:",
                 )
                 st.metric(
-                    "Probabilidad de bajada",
-                    f"{analysis.probability_down:.1f}%",
+                    analysis.bearish_display_label,
+                    f"{analysis.probability_down:.1f}{'%' if analysis.has_empirical_probability else '/100'}",
+                    delta=analysis.calibration_disclosure,
+                    delta_color="off",
                     border=True,
                     icon=":material/trending_down:",
                 )
@@ -1674,15 +1804,15 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                     help="Nivel de vigilancia derivado de Bollinger, VWAP, pivotes y Fibonacci; no es una orden.",
                 )
                 st.metric(
-                    "Confluencia de operación",
+                    "Score de operación",
                     (
-                        f"{analysis.operation_probability:.1f}%"
+                        f"{analysis.operation_probability:.1f}/100"
                         if analysis.signal in (TechnicalSignal.BUY, TechnicalSignal.SELL)
                         else "Sin gatillo"
                     ),
                     border=True,
                     icon=":material/security:",
-                    help="Probabilidad de la dirección operativa después del veto macro.",
+                    help="Score direccional después del veto macro; no se presenta como probabilidad sin calibración OOS masiva.",
                 )
 
             obv_labels = {
@@ -1804,28 +1934,28 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                 first, second = st.columns(2)
                 with first.container(border=True):
                     st.subheader("Gatillo operativo · 5 min", anchor=False)
-                    st.line_chart(price_frame, height=300)
+                    premium_line_chart(price_frame, height=300, key="quant_intraday_price")
                 with second.container(border=True):
                     st.subheader("Estocástico RSI · 5 min", anchor=False)
-                    st.line_chart(oscillator_frame, height=300)
+                    premium_line_chart(oscillator_frame, height=300, key="quant_stoch_rsi")
                 first, second = st.columns(2)
                 with first.container(border=True):
                     st.subheader("MACD rápido · 5 min", anchor=False)
-                    st.line_chart(macd_5m_frame, height=270)
+                    premium_line_chart(macd_5m_frame, height=270, key="quant_macd_5m")
                 with second.container(border=True):
                     st.subheader("Confirmación · 1 hora", anchor=False)
                     if macd_hourly_frame.dropna(how="all").empty:
                         st.info("Aún no hay suficientes barras horarias para MACD completo.")
                     else:
-                        st.line_chart(macd_hourly_frame, height=270)
+                        premium_line_chart(macd_hourly_frame, height=270, key="quant_macd_hourly")
                 first, second = st.columns(2)
                 with first.container(border=True):
                     st.subheader("ADX y dirección · 5 min", anchor=False)
-                    st.line_chart(strength_frame, height=250)
+                    premium_line_chart(strength_frame, height=250, key="quant_adx")
                     st.caption("ADX <20 activa el veto si existe una señal operativa.")
                 with second.container(border=True):
                     st.subheader("Volumen acumulado OBV · 5 min", anchor=False)
-                    st.line_chart(obv_frame, height=250)
+                    premium_line_chart(obv_frame, height=250, key="quant_obv")
                     st.write(f"**Última vela:** {analysis.candle_detail}")
 
             elif panel == "Contexto · diario–semanal":
@@ -1843,21 +1973,21 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                 first, second = st.columns(2)
                 with first.container(border=True):
                     st.subheader("Estructura diaria · EMA 9/21/50/200", anchor=False)
-                    st.line_chart(daily_frame, height=300)
+                    premium_line_chart(daily_frame, height=300, key="quant_daily_ema")
                 with second.container(border=True):
                     st.subheader("Estructura semanal · EMA 9/21/50/200", anchor=False)
-                    st.line_chart(weekly_frame, height=300)
+                    premium_line_chart(weekly_frame, height=300, key="quant_weekly_ema")
                 first, second = st.columns(2)
                 with first.container(border=True):
                     st.subheader("MACD macro · diario", anchor=False)
-                    st.line_chart(macd_daily_frame, height=270)
+                    premium_line_chart(macd_daily_frame, height=270, key="quant_macd_daily")
                 with second.container(border=True):
                     st.subheader("MACD macro · semanal", anchor=False)
-                    st.line_chart(macd_weekly_frame, height=270)
+                    premium_line_chart(macd_weekly_frame, height=270, key="quant_macd_weekly")
                 first, second = st.columns(2)
                 with first.container(border=True):
                     st.subheader("Ichimoku · diario", anchor=False)
-                    st.line_chart(ichimoku_daily_frame, height=280)
+                    premium_line_chart(ichimoku_daily_frame, height=280, key="quant_ichimoku_daily")
                 with second.container(border=True):
                     st.subheader("Soportes y resistencias · diario/semanal", anchor=False)
                     pivot_frame = pd.DataFrame([
@@ -1877,10 +2007,10 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                 first, second = st.columns(2)
                 with first.container(border=True):
                     st.subheader("Estructura mensual", anchor=False)
-                    st.line_chart(monthly_frame, height=300)
+                    premium_line_chart(monthly_frame, height=300, key="quant_monthly_ema")
                 with second.container(border=True):
                     st.subheader("MACD mensual", anchor=False)
-                    st.line_chart(monthly_macd_frame, height=300)
+                    premium_line_chart(monthly_macd_frame, height=300, key="quant_macd_monthly")
                 first, second = st.columns(2)
                 with first.container(border=True):
                     st.subheader("Fibonacci · 22 sesiones", anchor=False)
@@ -2040,6 +2170,93 @@ def _render_backtest_result(batch: BacktestBatchResult) -> None:
             help="0 es calibración perfecta; 0.25 equivale aproximadamente a predecir 50/50.",
         )
 
+    benchmark_rows = []
+    for result in batch.results:
+        if result.benchmarks is None:
+            continue
+        benchmark_rows.append(
+            {
+                "Emisora": result.symbol,
+                "Bot neto": result.validation.net_return_pct / 100,
+                "Buy & Hold neto": result.benchmarks.buy_hold_net_return_pct / 100,
+                "Cruce EMA neto": result.benchmarks.ema_crossover_net_return_pct / 100,
+                "Exceso vs B&H": result.benchmarks.bot_excess_vs_buy_hold_pct / 100,
+                "Exceso vs EMA": result.benchmarks.bot_excess_vs_ema_pct / 100,
+            }
+        )
+    if benchmark_rows:
+        with st.container(border=True):
+            st.subheader("Benchmarks netos y comparables", anchor=False)
+            st.dataframe(
+                pd.DataFrame(benchmark_rows),
+                hide_index=True,
+                key="backtest_benchmarks",
+                column_config={
+                    column: st.column_config.NumberColumn(format="percent")
+                    for column in (
+                        "Bot neto", "Buy & Hold neto", "Cruce EMA neto",
+                        "Exceso vs B&H", "Exceso vs EMA",
+                    )
+                },
+            )
+
+    fold_rows = [
+        {
+            "Emisora": result.symbol,
+            "Ventana": fold.fold,
+            "Inicio": pd.Timestamp(fold.start_date).date(),
+            "Fin": pd.Timestamp(fold.end_date).date(),
+            "Muestra calibración": fold.calibration_samples,
+            "Señales": fold.metrics.setups,
+            "Trades": fold.metrics.trades,
+            "Acierto": fold.metrics.win_rate,
+            "Brier": fold.metrics.brier_score,
+        }
+        for result in batch.results
+        for fold in result.walk_forward_folds
+    ]
+    if fold_rows:
+        with st.container(border=True):
+            st.subheader("Validación walk-forward expansiva", anchor=False)
+            st.dataframe(
+                pd.DataFrame(fold_rows),
+                hide_index=True,
+                key="backtest_walk_forward",
+                column_config={
+                    "Inicio": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                    "Fin": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                    "Acierto": st.column_config.NumberColumn(format="percent"),
+                    "Brier": st.column_config.NumberColumn(format="%.3f"),
+                },
+            )
+
+    regime_rows = [
+        {
+            "Emisora": result.symbol,
+            "Régimen": regime,
+            "Señales": metrics.setups,
+            "Trades": metrics.trades,
+            "Acierto": metrics.win_rate,
+            "Profit factor": metrics.profit_factor,
+            "Retorno": metrics.net_return_pct / 100,
+        }
+        for result in batch.results
+        for regime, metrics in result.regime_metrics
+    ]
+    if regime_rows:
+        with st.container(border=True):
+            st.subheader("Robustez por régimen de mercado", anchor=False)
+            st.dataframe(
+                pd.DataFrame(regime_rows),
+                hide_index=True,
+                key="backtest_regimes",
+                column_config={
+                    "Acierto": st.column_config.NumberColumn(format="percent"),
+                    "Profit factor": st.column_config.NumberColumn(format="%.2f"),
+                    "Retorno": st.column_config.NumberColumn(format="percent"),
+                },
+            )
+
     rows = []
     for result in batch.results:
         rows.append(
@@ -2090,7 +2307,7 @@ def _render_backtest_result(batch: BacktestBatchResult) -> None:
             equity_frame = pd.DataFrame(equity_rows).pivot(
                 index="Fecha", columns="Emisora", values="Capital simulado"
             )
-            st.line_chart(equity_frame, height=320)
+            premium_line_chart(equity_frame, height=320, key="backtest_equity_curve")
 
     rejection_rows = [
         {"Emisora": result.symbol, "Motivo": reason, "Cantidad": count}
@@ -2531,7 +2748,7 @@ def settings_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> 
         - Medir margen de seguridad y mostrar supuestos fundamentales.
         - Aplicar límites de pérdida, riesgo/recompensa y concentración.
         - Validar fuera de muestra y versionar modelo, horizonte y fecha de corte.
-        - Mostrar probabilidades calibradas e incertidumbre; nunca prometer certeza.
+        - Mostrar scores honestos y, solo con muestra masiva OOS, probabilidades calibradas con Brier.
         """)
 
 
@@ -2583,7 +2800,7 @@ pages = [
     st.Page(show_market, title="Mercado", icon=":material/query_stats:"),
     st.Page(
         show_probability_predictor,
-        title="Predictor de probabilidades",
+        title="Motor cuantitativo",
         icon=":material/neurology:",
     ),
     st.Page(show_audit, title="Auditoría", icon=":material/fact_check:"),
@@ -2597,13 +2814,13 @@ pages = [
 
 navigation = st.navigation(pages, position="sidebar", expanded=True)
 with st.sidebar:
-    st.divider()
-    st.caption("ESTADO DE MERCADO")
-    if fx_quote:
-        st.metric("USD/MXN", f"{fx_quote.rate:,.4f}", border=True)
-        st.caption(fx_quote.provider)
-    else:
-        st.warning("Tasa pendiente")
-    st.caption("Datos privados · almacenamiento local")
+    with st.container(key="sidebar_market_status"):
+        st.caption("ESTADO DE MERCADO")
+        if fx_quote:
+            st.metric("USD/MXN", f"{fx_quote.rate:,.4f}", border=True)
+            st.caption(fx_quote.provider)
+        else:
+            st.warning("Tasa pendiente")
+        st.caption("Datos privados · almacenamiento local")
 
 navigation.run()

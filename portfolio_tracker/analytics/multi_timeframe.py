@@ -43,7 +43,7 @@ class StrictConfluenceDecision:
 
 @dataclass(frozen=True, slots=True)
 class HorizonProjection:
-    """Distribucion heuristica auditable para un horizonte concreto."""
+    """Distribución auditable producida por un motor temporal identificado."""
 
     label: str
     probability_up: float
@@ -57,6 +57,10 @@ class HorizonProjection:
     atr_value: float
     local_support: float
     local_resistance: float
+    engine_name: str = "Motor no identificado"
+    probability_status: str = "Score heurístico preliminar"
+    calibration_samples: int = 0
+    brier_score: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +79,8 @@ class ExecutionLevels:
     pattern_target_applied: bool
     pattern_target_label: str
     structural_stop_applied: bool
+    take_profit_1_reward_risk: float = 0.0
+    minimum_reward_risk: float = 1.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +215,7 @@ def strict_confluence_gate(
     activation_trigger: str = "",
     activation_trigger_met: bool | None = None,
 ) -> StrictConfluenceDecision:
-    """Aplica la regla de oro y limita a 39% la probabilidad de la operación."""
+    """Aplica veto de régimen y limita a 39/100 el score operativo."""
 
     is_buy = signal == "BUY"
     is_sell = signal == "SELL"
@@ -243,21 +249,19 @@ def strict_confluence_gate(
             "validen el retroceso. Esperar que %K cruce a la baja de 80; para "
             "buscar un rebote LONG, exigir además una nueva señal desde sobreventa (<20)."
         )
+    elif risk_veto:
+        # El veto de régimen tiene precedencia sobre cualquier gatillo pendiente.
+        directional_score = probability_up if is_buy else probability_down
+        operation_probability = min(directional_score, 39.0)
+        alert = "⚠️ RIESGO ALTO / RÉGIMEN SIN VENTAJA: EVITAR OPERACIÓN"
+        scenario = alert
     elif activation_trigger and activation_trigger_met is False:
         operation_probability = 0.0
-        risk_veto = False
         alert = ""
         scenario = (
             "PLAN CONDICIONAL - DETONANTE PENDIENTE: "
             + (activation_trigger or "se requiere confirmación cuantitativa explícita.")
         )
-    elif risk_veto:
-        # El veto limita la ejecución; jamás debe invertir artificialmente
-        # la lectura direccional que produjo el motor técnico.
-        directional_probability = probability_up if is_buy else probability_down
-        operation_probability = min(directional_probability, 39.0)
-        alert = "⚠️ RIESGO ALTO / TENDENCIA MACRO EN CONTRA: EVITAR OPERACIÓN"
-        scenario = alert
     elif not operational:
         operation_probability = 0.0
         alert = ""
@@ -267,9 +271,9 @@ def strict_confluence_gate(
         alert = ""
         direction = "COMPRA" if is_buy else "VENTA"
         if operation_probability >= 65:
-            scenario = f"ESCENARIO {direction} VÁLIDO: confluencia {operation_probability:.1f}%; ejecutar solo con riesgo definido."
+            scenario = f"ESCENARIO {direction} VÁLIDO: score {operation_probability:.1f}/100; ejecutar solo con riesgo definido."
         else:
-            scenario = f"ESPERAR: señal de {direction.lower()} con solo {operation_probability:.1f}% de confluencia."
+            scenario = f"ESPERAR: señal de {direction.lower()} con score {operation_probability:.1f}/100."
     return StrictConfluenceDecision(
         probability_up=probability_up,
         probability_down=probability_down,
@@ -408,7 +412,13 @@ def calculate_horizon_projections(
     weekly: pd.DataFrame,
     monthly: pd.DataFrame,
 ) -> tuple[HorizonProjection, ...]:
-    """Proyecta seis horizontes sin descargar datos ni prometer precisión estadística."""
+    """Proyecta horizontes con tres motores desacoplados.
+
+    El oscilador operativo de 5 minutos participa exclusivamente en 1h/6h. El
+    motor swing usa precio/ATR/medias diarios y el táctico usa solo estructura
+    semanal/mensual; el filtro fundamental se incorpora después mediante el
+    corte versionado, sin contaminar los gatillos intradía.
+    """
 
     engine_bias = max(-1.0, min(1.0, (float(probability_up) - 50.0) / 35.0))
     intraday_bias = _latest_context_bias(intraday)
@@ -417,23 +427,29 @@ def calculate_horizon_projections(
     weekly_bias = _latest_context_bias(weekly)
     monthly_bias = _latest_context_bias(monthly)
     definitions = (
-        ("1 Hora", 0.75 * engine_bias + 0.25 * intraday_bias, True, intraday, 12.0, 36),
-        ("6 Horas", 0.55 * engine_bias + 0.25 * intraday_bias + 0.20 * hourly_bias, True, hourly, 6.0, 20),
-        ("1 Día", 0.30 * engine_bias + 0.25 * hourly_bias + 0.45 * daily_bias, True, daily, 1.0, 20),
-        ("1 Semana", 0.20 * engine_bias + 0.30 * daily_bias + 0.50 * weekly_bias, False, daily, 5.0, 30),
-        ("1 Mes", 0.15 * daily_bias + 0.40 * weekly_bias + 0.45 * monthly_bias, False, daily, 22.0, 66),
-        ("6 Meses", 0.15 * daily_bias + 0.30 * weekly_bias + 0.55 * monthly_bias, False, daily, 126.0, 252),
+        ("1 Hora", 0.70 * engine_bias + 0.30 * intraday_bias, True, intraday, 12.0, 36, "Intradía / microestructura"),
+        ("6 Horas", 0.50 * engine_bias + 0.30 * intraday_bias + 0.20 * hourly_bias, True, hourly, 6.0, 20, "Intradía / microestructura"),
+        ("1 Día", 0.35 * hourly_bias + 0.65 * daily_bias, True, daily, 1.0, 20, "Swing / acción del precio"),
+        ("1 Semana", 0.45 * daily_bias + 0.55 * weekly_bias, False, daily, 5.0, 30, "Swing / acción del precio"),
+        ("1 Mes", 0.35 * weekly_bias + 0.65 * monthly_bias, False, daily, 22.0, 66, "Táctico / fundamental"),
+        ("6 Meses", 0.20 * weekly_bias + 0.80 * monthly_bias, False, daily, 126.0, 252, "Táctico / fundamental"),
     )
     projections: list[HorizonProjection] = []
-    for label, bias, short_term, frame, horizon_bars, support_window in definitions:
-        if short_term and engine_bias < 0 < bias:
+    for label, bias, short_term, frame, horizon_bars, support_window, engine_name in definitions:
+        uses_intraday_score = engine_name.startswith("Intradía")
+        if uses_intraday_score and engine_bias < 0 < bias:
             bias = engine_bias * 0.35
-        elif short_term and engine_bias > 0 > bias:
+        elif uses_intraday_score and engine_bias > 0 > bias:
             bias = engine_bias * 0.35
         up, range_probability, down = _projection_distribution(bias, risk_veto, short_term)
         bias_label = "Alcista" if up > max(range_probability, down) else "Bajista" if down > max(up, range_probability) else "Rango"
         targets = _price_projection(frame, last_price, horizon_bars, support_window)
-        projections.append(HorizonProjection(label, up, range_probability, down, bias_label, *targets))
+        projections.append(
+            HorizonProjection(
+                label, up, range_probability, down, bias_label, *targets,
+                engine_name=engine_name,
+            )
+        )
     return tuple(projections)
 
 
@@ -490,7 +506,15 @@ def calculate_execution_levels(
         stop_loss = max(atr_stop, structural_stop)
         structural_stop_applied = structural_stop > atr_stop
         take_profit_1 = min(last_price, short.bearish_target)
+        minimum_tp1 = max(
+            0.01,
+            entry_high - 1.5 * (stop_loss - entry_high),
+        )
+        take_profit_1 = min(take_profit_1, minimum_tp1)
         take_profit_2 = min(take_profit_1, projections[1].bearish_target)
+        tp1_reward_risk = (
+            (entry_high - take_profit_1) / max(stop_loss - entry_high, 0.01)
+        )
         direction = "SHORT"
     else:
         supports = [short.local_support, short.range_low]
@@ -517,14 +541,20 @@ def calculate_execution_levels(
         stop_loss = max(0.01, min(atr_stop, structural_stop))
         structural_stop_applied = structural_stop < atr_stop
         take_profit_1 = max(last_price, short.bullish_target)
+        minimum_tp1 = entry_high + 1.5 * (entry_high - stop_loss)
         if (
             confirmed_pattern_target is not None
             and math.isfinite(float(confirmed_pattern_target))
             and float(confirmed_pattern_target) > last_price
         ):
-            take_profit_1 = float(confirmed_pattern_target)
-            pattern_target_applied = True
+            take_profit_1 = max(float(confirmed_pattern_target), minimum_tp1)
+            pattern_target_applied = float(confirmed_pattern_target) >= minimum_tp1
+        else:
+            take_profit_1 = max(take_profit_1, minimum_tp1)
         take_profit_2 = max(take_profit_1, projections[1].bullish_target)
+        tp1_reward_risk = (
+            (take_profit_1 - entry_high) / max(entry_high - stop_loss, 0.01)
+        )
         direction = "LONG"
     return ExecutionLevels(
         entry_low=round(entry_low, 2),
@@ -539,6 +569,8 @@ def calculate_execution_levels(
         pattern_target_applied=pattern_target_applied,
         pattern_target_label=confirmed_pattern_label if pattern_target_applied else "",
         structural_stop_applied=structural_stop_applied,
+        take_profit_1_reward_risk=round(tp1_reward_risk, 3),
+        minimum_reward_risk=1.5,
     )
 
 
@@ -662,15 +694,61 @@ def calculate_15_day_projection(
         )
         central_prices.append(central_price)
 
-    lower_quantiles = np.quantile(simulated, 0.15, axis=0)
-    upper_quantiles = np.quantile(simulated, 0.85, axis=0)
+    previous_simulated = np.column_stack(
+        (
+            np.full(simulation_count, last_price, dtype=float),
+            simulated[:, :-1],
+        )
+    )
+    simulated_daily_moves = np.abs(simulated / previous_simulated - 1.0)
+    local_move_quantiles = np.quantile(simulated_daily_moves, 0.70, axis=0)
+    historical_range_pct = (
+        (usable["High"] - usable["Low"])
+        / usable["Close"].shift(1).replace(0.0, float("nan"))
+    ).replace([np.inf, -np.inf], np.nan).dropna()
+    typical_range_pct = (
+        float(historical_range_pct.tail(60).quantile(0.65))
+        if not historical_range_pct.empty
+        else atr_pct * 0.80
+    )
+    historical_body_pct = log_returns.abs()
+    body_cap_pct = min(
+        atr_pct * 0.85,
+        max(
+            atr_pct * 0.35,
+            float(historical_body_pct.tail(60).quantile(0.75))
+            if not historical_body_pct.empty
+            else atr_pct * 0.50,
+        ),
+    )
     anchor = pd.Timestamp(as_of).tz_localize(None).normalize()
     future_dates = pd.bdate_range(start=anchor + pd.offsets.BDay(1), periods=sessions)
     points: list[DailyProjectionPoint] = []
+    projected_open = last_price
     for day_number, session_date in enumerate(future_dates, start=1):
-        expected_close = central_prices[day_number - 1]
-        floor = min(float(lower_quantiles[day_number - 1]), expected_close)
-        ceiling = max(float(upper_quantiles[day_number - 1]), expected_close)
+        raw_close = central_prices[day_number - 1]
+        raw_body_return = raw_close / projected_open - 1.0
+        bounded_body_return = max(
+            -body_cap_pct,
+            min(body_cap_pct, raw_body_return),
+        )
+        expected_close = max(0.01, projected_open * (1.0 + bounded_body_return))
+        body_size = abs(expected_close - projected_open)
+        target_range_pct = max(
+            atr_pct * 0.65,
+            typical_range_pct,
+            float(local_move_quantiles[day_number - 1]) * 1.15,
+            body_size / projected_open / 0.72,
+        )
+        target_range_pct = min(atr_pct * 1.35, target_range_pct)
+        target_range = projected_open * target_range_pct
+        wick_budget = max(atr_value * 0.12, target_range - body_size)
+        # Una vela alcista suele dejar algo más de mecha inferior y viceversa.
+        lower_share = 0.55 if expected_close >= projected_open else 0.45
+        lower_wick = wick_budget * lower_share
+        upper_wick = wick_budget - lower_wick
+        floor = max(0.01, min(projected_open, expected_close) - lower_wick)
+        ceiling = max(projected_open, expected_close) + upper_wick
         points.append(
             DailyProjectionPoint(
                 day_number=day_number,
@@ -681,4 +759,5 @@ def calculate_15_day_projection(
                 atr_value=round(atr_value, 4),
             )
         )
+        projected_open = expected_close
     return tuple(points)

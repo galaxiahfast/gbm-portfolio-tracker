@@ -24,7 +24,7 @@ from portfolio_tracker.analytics.multi_timeframe import (
 from portfolio_tracker.analytics.technical_probability import add_intraday_indicators
 
 
-ENGINE_VERSION = "oos-phase4-v1"
+ENGINE_VERSION = "walk-forward-phase5-v1"
 REQUIRED_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 
 
@@ -44,6 +44,9 @@ class BacktestConfig:
     minimum_validation_trades: int = 5
     maximum_drawdown_pct: float = 15.0
     minimum_profit_factor: float = 1.10
+    minimum_validation_signals: int = 300
+    walk_forward_folds: int = 4
+    signal_batch_size: int = 1_000
 
     def __post_init__(self) -> None:
         if not 0.55 <= self.training_fraction <= 0.85:
@@ -58,6 +61,12 @@ class BacktestConfig:
             raise ValueError("El riesgo y la exposición deben ser positivos.")
         if not 0.50 <= self.minimum_probability <= 0.80:
             raise ValueError("La probabilidad mínima debe estar entre 50% y 80%.")
+        if self.minimum_validation_signals < 300:
+            raise ValueError("La validación profesional exige al menos 300 señales OOS.")
+        if self.walk_forward_folds < 3:
+            raise ValueError("Walk-forward requiere al menos tres ventanas.")
+        if not 100 <= self.signal_batch_size <= 10_000:
+            raise ValueError("El lote de simulación debe contener entre 100 y 10,000 señales.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +82,7 @@ class SetupCandidate:
     monthly_regime: str
     exposure_factor: float
     trigger: str
+    market_regime: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +107,7 @@ class SimulatedTrade:
     net_r_multiple: float
     outcome: str
     exit_reason: str
+    market_regime: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +129,24 @@ class PerformanceMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class WalkForwardFold:
+    fold: int
+    start_date: str
+    end_date: str
+    calibration_samples: int
+    metrics: PerformanceMetrics
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkMetrics:
+    buy_hold_net_return_pct: float
+    ema_crossover_net_return_pct: float
+    bot_excess_vs_buy_hold_pct: float
+    bot_excess_vs_ema_pct: float
+    commission_bps_per_side: float
+
+
+@dataclass(frozen=True, slots=True)
 class SymbolBacktestResult:
     symbol: str
     data_start: str
@@ -132,6 +161,9 @@ class SymbolBacktestResult:
     training_trades: tuple[SimulatedTrade, ...]
     validation_trades: tuple[SimulatedTrade, ...]
     validation_equity_curve: tuple[tuple[str, float], ...]
+    walk_forward_folds: tuple[WalkForwardFold, ...] = ()
+    regime_metrics: tuple[tuple[str, PerformanceMetrics], ...] = ()
+    benchmarks: BenchmarkMetrics | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,11 +263,13 @@ def _prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     result["MonthlyBias"] = _macro_bias(source, "ME", result.index)
     result["PriorHigh20"] = result["High"].shift(1).rolling(20, min_periods=20).max()
     result["PriorLow20"] = result["Low"].shift(1).rolling(20, min_periods=20).min()
+    result["ATRPercent"] = result["ATR14"] / result["Close"].replace(0.0, float("nan"))
+    result["ATRPercentMedian"] = result["ATRPercent"].expanding(min_periods=60).median()
     return result.dropna(
         subset=[
             "StochRSI_K", "StochRSI_D", "MACD", "MACD_signal",
             "MACD_histogram", "ATR14", "ADX14", "Volume_MA20",
-            "EMA21", "PriorHigh20", "PriorLow20",
+            "EMA21", "EMA50", "PriorHigh20", "PriorLow20", "ATRPercentMedian",
         ]
     )
 
@@ -265,7 +299,7 @@ def _generate_candidates(
             rejected["Volumen no supera su media de 20 sesiones"] += 1
             continue
         adx = float(row["ADX14"])
-        if adx < config.minimum_adx:
+        if adx < max(20.0, config.minimum_adx):
             rejected["ADX menor a 20: mercado lateral"] += 1
             continue
 
@@ -283,6 +317,25 @@ def _generate_candidates(
             exposure_factor = 0.50
 
         direction = 1.0 if side == "LONG" else -1.0
+        ema_aligned = (
+            float(row["EMA9"]) > float(row["EMA21"])
+            if side == "LONG"
+            else float(row["EMA9"]) < float(row["EMA21"])
+        )
+        macd_aligned = (
+            float(row["MACD"]) > float(row["MACD_signal"])
+            if side == "LONG"
+            else float(row["MACD"]) < float(row["MACD_signal"])
+        )
+        if adx < 25.0:
+            # Entre 20 y 25 existe señal, pero no una tendencia operable con
+            # tamaño normal: el backtest replica la exposición reducida real.
+            exposure_factor = min(exposure_factor, 0.25)
+        elif not (ema_aligned and macd_aligned):
+            # ADX aislado no basta. Sin alineación direccional conjunta de EMA
+            # y MACD, la señal queda en transición y opera a media exposición.
+            exposure_factor = min(exposure_factor, 0.50)
+
         score = 3.0 * direction
         score += direction if float(row["MACD"]) > float(row["MACD_signal"]) else -direction
         score += direction if float(row["Close"]) > float(row["EMA21"]) else -direction
@@ -310,6 +363,15 @@ def _generate_candidates(
             "BULLISH" if monthly_bias > 0 else
             "BEARISH" if monthly_bias < 0 else "NEUTRAL"
         )
+        market_regime = (
+            "ALTA_VOLATILIDAD"
+            if float(row["ATRPercent"]) > 1.5 * float(row["ATRPercentMedian"])
+            else "LATERAL"
+            if adx < 25
+            else "ALCISTA"
+            if float(row["Close"]) > float(row["EMA50"])
+            else "BAJISTA"
+        )
         candidates.append(
             SetupCandidate(
                 signal_position=position,
@@ -323,6 +385,7 @@ def _generate_candidates(
                 monthly_regime=monthly_regime,
                 exposure_factor=exposure_factor,
                 trigger=trigger,
+                market_regime=market_regime,
             )
         )
     return candidates, rejected
@@ -417,6 +480,7 @@ def _simulate_trade(
         net_r_multiple=round(net_r, 6),
         outcome="WIN" if net_pnl > 0 else "LOSS",
         exit_reason=exit_reason,
+        market_regime=candidate.market_regime,
     )
 
 
@@ -501,6 +565,11 @@ def evaluate_capital_preservation(
     metrics: PerformanceMetrics, config: BacktestConfig
 ) -> tuple[str, tuple[str, ...]]:
     reasons: list[str] = []
+    if metrics.setups < config.minimum_validation_signals:
+        reasons.append(
+            f"Solo hay {metrics.setups} señales OOS; se requieren al menos "
+            f"{config.minimum_validation_signals} para inferencia robusta."
+        )
     if metrics.trades < config.minimum_validation_trades:
         reasons.append(
             f"Solo hay {metrics.trades} operaciones OOS; se requieren {config.minimum_validation_trades}."
@@ -524,6 +593,53 @@ def evaluate_capital_preservation(
         "APROBADO ESTADÍSTICAMENTE",
         ("El tramo OOS supera los límites mínimos de preservación de capital.",),
     )
+
+
+def _benchmark_metrics(
+    validation: pd.DataFrame,
+    *,
+    bot_return_pct: float,
+    config: BacktestConfig,
+) -> BenchmarkMetrics:
+    """Controles netos con los mismos costos por lado que el bot."""
+
+    source = validation.dropna(subset=["Open", "Close"]).copy()
+    if len(source) < 2:
+        buy_hold = ema_return = 0.0
+    else:
+        cost_rate = (
+            config.commission_bps_per_side + config.slippage_bps_per_side
+        ) / 10_000
+        entry = float(source["Open"].iloc[0]) * (1 + cost_rate)
+        exit_price = float(source["Close"].iloc[-1]) * (1 - cost_rate)
+        buy_hold = (exit_price / entry - 1) * 100
+        close = source["Close"].astype(float)
+        ema9 = close.ewm(span=9, adjust=False, min_periods=9).mean()
+        ema21 = close.ewm(span=21, adjust=False, min_periods=21).mean()
+        position = (ema9 > ema21).astype(float).shift(1).fillna(0.0)
+        returns = close.pct_change().fillna(0.0)
+        turnover = position.diff().abs().fillna(position.abs())
+        net_returns = position * returns - turnover * cost_rate
+        ema_return = (float((1.0 + net_returns).prod()) - 1.0) * 100
+    return BenchmarkMetrics(
+        buy_hold_net_return_pct=round(buy_hold, 4),
+        ema_crossover_net_return_pct=round(ema_return, 4),
+        bot_excess_vs_buy_hold_pct=round(bot_return_pct - buy_hold, 4),
+        bot_excess_vs_ema_pct=round(bot_return_pct - ema_return, 4),
+        commission_bps_per_side=config.commission_bps_per_side,
+    )
+
+
+def iter_candidate_batches(
+    candidates: list[SetupCandidate],
+    batch_size: int,
+):
+    """Itera señales en lotes acotados para históricos masivos sin duplicarlas."""
+
+    if batch_size <= 0:
+        raise ValueError("El tamaño de lote debe ser positivo.")
+    for start in range(0, len(candidates), batch_size):
+        yield candidates[start : start + batch_size]
 
 
 def run_symbol_backtest(
@@ -560,35 +676,71 @@ def run_symbol_backtest(
         training_equity += trade.net_pnl_usd
         last_training_exit = trade.exit_date
 
-    calibration, fallback_probability = _calibration_table(training_trades)
     validation_trades: list[SimulatedTrade] = []
     validation_equity = starting_capital_usd
     last_validation_exit = ""
     statistical_rejections = 0
-    for candidate in validation_candidates:
-        probability = calibration.get(
-            (candidate.side, candidate.strength_bucket), fallback_probability
+    walk_forward: list[WalkForwardFold] = []
+    calibration_evidence = list(training_trades)
+    fold_size = max(1, math.ceil(len(validation_candidates) / config.walk_forward_folds))
+    for fold_number, start in enumerate(
+        range(0, len(validation_candidates), fold_size), start=1
+    ):
+        fold_candidates = validation_candidates[start : start + fold_size]
+        calibration, fallback_probability = _calibration_table(calibration_evidence)
+        fold_trades: list[SimulatedTrade] = []
+        fold_rejections = 0
+        for candidate in (
+            item
+            for batch in iter_candidate_batches(
+                fold_candidates, config.signal_batch_size
+            )
+            for item in batch
+        ):
+            probability = calibration.get(
+                (candidate.side, candidate.strength_bucket), fallback_probability
+            )
+            expected_r = probability * config.reward_risk - (1 - probability)
+            if probability < config.minimum_probability:
+                hard_rejections["Probabilidad calibrada menor al mínimo"] += 1
+                statistical_rejections += 1
+                fold_rejections += 1
+                continue
+            if config.reward_risk < config.minimum_reward_risk or expected_r <= 0:
+                hard_rejections["Valor esperado o riesgo/beneficio insuficiente"] += 1
+                statistical_rejections += 1
+                fold_rejections += 1
+                continue
+            if last_validation_exit and candidate.signal_date <= last_validation_exit:
+                hard_rejections["Señal solapada con una posición activa"] += 1
+                statistical_rejections += 1
+                fold_rejections += 1
+                continue
+            trade = _simulate_trade(
+                symbol.upper(), f"WALK_FORWARD_{fold_number}", indicators, candidate,
+                config, validation_equity, probability,
+            )
+            fold_trades.append(trade)
+            validation_trades.append(trade)
+            validation_equity += trade.net_pnl_usd
+            last_validation_exit = trade.exit_date
+        fold_metrics, _ = calculate_metrics(
+            fold_trades,
+            setups=len(fold_candidates),
+            rejected=fold_rejections,
+            starting_capital=starting_capital_usd,
         )
-        expected_r = probability * config.reward_risk - (1 - probability)
-        if probability < config.minimum_probability:
-            hard_rejections["Probabilidad calibrada menor al mínimo"] += 1
-            statistical_rejections += 1
-            continue
-        if config.reward_risk < config.minimum_reward_risk or expected_r <= 0:
-            hard_rejections["Valor esperado o riesgo/beneficio insuficiente"] += 1
-            statistical_rejections += 1
-            continue
-        if last_validation_exit and candidate.signal_date <= last_validation_exit:
-            hard_rejections["Señal solapada con una posición activa"] += 1
-            statistical_rejections += 1
-            continue
-        trade = _simulate_trade(
-            symbol.upper(), "VALIDATION", indicators, candidate, config,
-            validation_equity, probability,
+        walk_forward.append(
+            WalkForwardFold(
+                fold=fold_number,
+                start_date=fold_candidates[0].signal_date,
+                end_date=fold_candidates[-1].signal_date,
+                calibration_samples=len(calibration_evidence),
+                metrics=fold_metrics,
+            )
         )
-        validation_trades.append(trade)
-        validation_equity += trade.net_pnl_usd
-        last_validation_exit = trade.exit_date
+        # Solo resultados de ventanas ya cerradas alimentan la siguiente curva.
+        calibration_evidence.extend(fold_trades)
 
     training_metrics, _ = calculate_metrics(
         training_trades,
@@ -604,6 +756,26 @@ def run_symbol_backtest(
     )
     decision, reasons = evaluate_capital_preservation(validation_metrics, config)
     normalized = _normalize_frame(frame)
+    regime_metrics = tuple(
+        (
+            regime,
+            calculate_metrics(
+                [trade for trade in validation_trades if trade.market_regime == regime],
+                setups=sum(candidate.market_regime == regime for candidate in validation_candidates),
+                rejected=0,
+                starting_capital=starting_capital_usd,
+            )[0],
+        )
+        for regime in ("ALCISTA", "BAJISTA", "ALTA_VOLATILIDAD", "LATERAL")
+    )
+    validation_source = normalized.loc[
+        pd.DatetimeIndex(normalized.index) >= pd.Timestamp(split_date)
+    ]
+    benchmarks = _benchmark_metrics(
+        validation_source,
+        bot_return_pct=validation_metrics.net_return_pct,
+        config=config,
+    )
     return SymbolBacktestResult(
         symbol=symbol.upper(),
         data_start=pd.Timestamp(normalized.index[0]).isoformat(),
@@ -618,6 +790,9 @@ def run_symbol_backtest(
         training_trades=tuple(training_trades),
         validation_trades=tuple(validation_trades),
         validation_equity_curve=validation_curve,
+        walk_forward_folds=tuple(walk_forward),
+        regime_metrics=regime_metrics,
+        benchmarks=benchmarks,
     )
 
 

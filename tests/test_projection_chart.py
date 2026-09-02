@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from portfolio_tracker.services.projection_chart import (
     HORIZON_ORDER,
     PROJECTION_DAYS,
@@ -43,8 +45,37 @@ def test_plotly_projection_contains_15_sequential_business_days() -> None:
     assert all(value > 0 for value in candles.open)
     assert all(low <= min(open_, close) for low, open_, close in zip(candles.low, candles.open, candles.close))
     assert all(high >= max(open_, close) for high, open_, close in zip(candles.high, candles.open, candles.close))
+    assert all(
+        high - low <= point.atr_value * 1.35 + 0.03
+        for high, low, point in zip(candles.high, candles.low, analysis.daily_projection)
+    )
     assert len(figure.data) == 2
     assert figure.layout.shapes
+    assert figure.layout.yaxis.range is not None
+
+
+def test_plotly_defensively_clips_legacy_extreme_projection_wicks() -> None:
+    analysis = _analysis()
+    extreme = tuple(
+        replace(
+            point,
+            daily_floor=max(0.01, point.expected_close * 0.20),
+            daily_ceiling=point.expected_close * 3.0,
+        )
+        for point in analysis.daily_projection
+    )
+
+    figure = build_15_day_projection_figure(
+        extreme,
+        analysis.last_price,
+        analysis.daily_indicators,
+    )
+    candles = next(trace for trace in figure.data if trace.name == "Velas proyectadas")
+
+    assert all(
+        high - low <= point.atr_value * 1.35 + 0.03
+        for high, low, point in zip(candles.high, candles.low, extreme)
+    )
 
 
 def test_projection_rejects_incoherent_or_short_history() -> None:

@@ -83,19 +83,19 @@ def executive_decision(analysis: "ProbabilityAnalysis") -> ExecutiveDecision:
         return ExecutiveDecision(
             "COMPRA AHORA",
             "success",
-            f"Compra validada con {analysis.operation_probability:.1f}% de confluencia; define salida y riesgo antes de ejecutar.",
+            f"Compra validada con score {analysis.operation_probability:.1f}/100; define salida y riesgo antes de ejecutar.",
         )
     if analysis.signal.value == "SELL" and analysis.operation_probability >= 65:
         return ExecutiveDecision(
             "VENDE / PROTEGE CAPITAL",
             "danger",
-            f"Venta validada con {analysis.operation_probability:.1f}% de confluencia; evita abrir posiciones largas.",
+            f"Venta validada con score {analysis.operation_probability:.1f}/100; evita abrir posiciones largas.",
         )
     if analysis.probability_down >= 55:
         return ExecutiveDecision(
             "EVITA / ESPERA",
             "danger",
-            f"Debilidad bajista inmediata: {analysis.probability_down:.1f}% de sesgo a la baja; no abrir largos sin una nueva confirmación.",
+            f"Debilidad bajista inmediata: score {analysis.probability_down:.1f}/100; no abrir largos sin una nueva confirmación.",
         )
     return ExecutiveDecision("EVITA / ESPERA", "warning", analysis.scenario)
 
@@ -168,7 +168,7 @@ def _report_header(analysis: "ProbabilityAnalysis", title: str, styles) -> list[
     return [
         Paragraph(f"{title} - {analysis.symbol}", styles["ReportTitle"]),
         Paragraph(
-            f"Datos hasta {_safe_text(analysis.as_of.isoformat())} | Fuente: Yahoo Finance / yfinance | Generado por el motor Fase 4",
+            f"Datos hasta {_safe_text(analysis.as_of.isoformat())} | Fuente: Yahoo Finance / yfinance | Motor Fase 5 | {_safe_text(analysis.probability_status)}",
             styles["ReportSubtitle"],
         ),
     ]
@@ -176,7 +176,7 @@ def _report_header(analysis: "ProbabilityAnalysis", title: str, styles) -> list[
 
 def _fundamental_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  # type: ignore[no-untyped-def]
     reasons = " | ".join(_safe_text(item) for item in analysis.fundamental_reasons[:6])
-    return [
+    story = [
         Paragraph("Contexto fundamental y noticias", styles["Section"]),
         _table(
             [
@@ -194,6 +194,27 @@ def _fundamental_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:
         Spacer(1, 5),
         Paragraph(reasons or "Fuente no disponible; ponderación neutral.", styles["BodySmall"]),
     ]
+    if analysis.event_risk_level != "BAJO" or analysis.event_risk_window_until:
+        story.extend(
+            [
+                Spacer(1, 5),
+                Paragraph(
+                    _safe_text(
+                        f"Event Risk Engine: {analysis.event_risk_level}; bloqueo hasta "
+                        f"{analysis.event_risk_window_until or 'sin ventana activa'}."
+                    ),
+                    styles["BodySmall"],
+                ),
+            ]
+        )
+    if analysis.fundamental_news_audit:
+        news_rows = [["Titular auditado / fuente / recencia / sentimiento"]]
+        news_rows.extend(
+            [[Paragraph(_safe_text(item), styles["BodySmall"])]]
+            for item in analysis.fundamental_news_audit[:8]
+        )
+        story.extend([Spacer(1, 5), _table(news_rows, [174 * mm])])
+    return story
 
 
 def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  # type: ignore[no-untyped-def]
@@ -208,10 +229,28 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
     decision_box.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), decision_color), ("BOX", (0, 0), (-1, -1), 0, decision_color), ("TOPPADDING", (0, 0), (-1, 0), 10), ("BOTTOMPADDING", (0, -1), (-1, -1), 10), ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12)]))
     story.extend([decision_box, Spacer(1, 10), Paragraph("Resumen ejecutivo", styles["Section"])])
     summary_rows = [
-        ["Último precio", "Nivel sugerido", "Subida", "Bajada", "Confluencia"],
-        [f"${analysis.last_price:,.2f}", f"${analysis.suggested_level:,.2f}", f"{analysis.probability_up:.1f}%", f"{analysis.probability_down:.1f}%", f"{analysis.operation_probability:.1f}%" if analysis.operation_probability else "Detonante pendiente"],
+        [
+            "Último precio",
+            "Nivel sugerido",
+            _safe_text(analysis.bullish_display_label),
+            _safe_text(analysis.bearish_display_label),
+            "Score operativo",
+        ],
+        [
+            f"${analysis.last_price:,.2f}",
+            f"${analysis.suggested_level:,.2f}",
+            f"{analysis.probability_up:.1f}{'%' if analysis.has_empirical_probability else '/100'}",
+            f"{analysis.probability_down:.1f}{'%' if analysis.has_empirical_probability else '/100'}",
+            f"{analysis.operation_probability:.1f}/100" if analysis.operation_probability else "Detonante pendiente",
+        ],
     ]
-    story.extend([_table(summary_rows, [34.8 * mm] * 5), Spacer(1, 8), Paragraph(_safe_text(analysis.scenario), styles["BodySmall"])])
+    story.extend([
+        _table(summary_rows, [34.8 * mm] * 5),
+        Spacer(1, 5),
+        Paragraph(_safe_text(analysis.calibration_disclosure), styles["BodySmall"]),
+        Spacer(1, 8),
+        Paragraph(_safe_text(analysis.scenario), styles["BodySmall"]),
+    ])
     story.extend(_fundamental_story(analysis, styles))
     if analysis.neckline_heat_warning:
         story.extend(
@@ -268,6 +307,10 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
         if levels.pattern_target_applied
         else ""
     )
+    target_basis += (
+        f" R:R TP1 {levels.take_profit_1_reward_risk:.2f}R "
+        f"(mínimo {levels.minimum_reward_risk:.1f}R)."
+    )
     story.append(Paragraph(_safe_text(stop_basis + target_basis), styles["BodySmall"]))
 
     story.append(Paragraph("Patrones chartistas activos", styles["Section"]))
@@ -300,15 +343,15 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
 
     # Mantiene la tabla completa en una página y evita una fila huérfana.
     story.append(PageBreak())
-    story.append(Paragraph("Probabilidades y precios por horizonte", styles["Section"]))
+    story.append(Paragraph("Scores y precios por horizonte", styles["Section"]))
     ordered_projections = ordered_horizon_projections(analysis.horizon_projections)
-    horizon_rows: list[list[object]] = [["Horizonte", "Subida / objetivo", "Rango / precios", "Bajada / objetivo", "Sesgo"]]
+    horizon_rows: list[list[object]] = [["Horizonte / estado", "Alcista / objetivo", "Lateral / precios", "Bajista / objetivo", "Sesgo"]]
     horizon_rows.extend(
         [
-            item.label,
-            Paragraph(f"{item.probability_up:.1f}%<br/>${item.bullish_target:.2f}", styles["BodySmall"]),
-            Paragraph(f"{item.probability_range:.1f}%<br/>${item.range_low:.2f} - ${item.range_high:.2f}", styles["BodySmall"]),
-            Paragraph(f"{item.probability_down:.1f}%<br/>${item.bearish_target:.2f}", styles["BodySmall"]),
+            Paragraph(f"{item.label}<br/>{_safe_text(item.probability_status)}", styles["BodySmall"]),
+            Paragraph(f"{item.probability_up:.1f}/100<br/>${item.bullish_target:.2f}", styles["BodySmall"]),
+            Paragraph(f"{item.probability_range:.1f}/100<br/>${item.range_low:.2f} - ${item.range_high:.2f}", styles["BodySmall"]),
+            Paragraph(f"{item.probability_down:.1f}/100<br/>${item.bearish_target:.2f}", styles["BodySmall"]),
             item.bias,
         ]
         for item in ordered_projections
@@ -455,14 +498,16 @@ def _technical_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
                     _safe_text(
                         f"symbol={analysis.symbol}; decision={decision.label}; signal={analysis.signal.value}; "
                         f"price={analysis.last_price:.4f}; suggested_level={analysis.suggested_level:.4f}; "
-                        f"probability_up={analysis.probability_up:.1f}; probability_down={analysis.probability_down:.1f}; "
-                        f"operation_confluence={analysis.operation_probability:.1f}; risk_veto={analysis.risk_veto}; "
+                        f"bullish_score={analysis.probability_up:.1f}; bearish_score={analysis.probability_down:.1f}; "
+                        f"calibration_status={analysis.probability_status}; calibration_samples={analysis.calibration_samples}; "
+                        f"brier={analysis.calibration_brier_score}; operation_score={analysis.operation_probability:.1f}; risk_veto={analysis.risk_veto}; "
                         f"plan_direction={levels.direction}; "
                         f"plan_conditional={analysis.execution_plan_conditional}; long_blocked={analysis.long_entry_blocked}; "
                         f"rebound_watch={analysis.rebound_watch_active}; trigger_met={analysis.activation_trigger_met}; "
                         f"tactical_short={analysis.tactical_short}; exposure_factor={analysis.exposure_factor:.2f}; "
                         f"entry_low={levels.entry_low:.2f}; entry_high={levels.entry_high:.2f}; "
                         f"stop_loss={levels.stop_loss:.2f}; take_profit_1={levels.take_profit_1:.2f}; "
+                        f"tp1_reward_risk={levels.take_profit_1_reward_risk:.3f}; "
                         f"take_profit_2={levels.take_profit_2:.2f}; "
                         f"atr_5m={levels.atr_5m:.4f}; stop_atr_multiple={levels.stop_atr_multiple:.1f}; "
                         f"pattern_target_applied={levels.pattern_target_applied}; "
@@ -479,7 +524,12 @@ def _technical_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
                 ),
                 Spacer(1, 8),
                 Paragraph(
-                    "AVISO: los porcentajes son puntajes heurísticos no calibrados. Este documento no es asesoría financiera, no garantiza resultados y no sustituye una estrategia de tamaño de posición, stop y pérdida máxima.",
+                    _safe_text(
+                        f"AVISO: {analysis.probability_status}; muestra "
+                        f"{analysis.calibration_samples}, Brier "
+                        f"{analysis.calibration_brier_score if analysis.calibration_brier_score is not None else 'sin calcular'}. "
+                        "Este documento no es asesoría financiera ni garantiza resultados."
+                    ),
                     styles["BodySmall"],
                 ),
             ]
@@ -505,8 +555,8 @@ def _calibration_story(
     story: list[object] = [
         Paragraph("Calibración y backtesting", styles["Section"]),
         Paragraph(
-            "Validación cronológica fuera de muestra. Los parámetros se seleccionan dentro "
-            "del entrenamiento y se congelan antes de evaluar el tramo OOS.",
+            "Validación walk-forward cronológica por regímenes. Cada ventana recalibra solo "
+            "con evidencia anterior y se compara contra Buy & Hold y cruce EMA netos.",
             styles["BodySmall"],
         ),
     ]
@@ -606,6 +656,28 @@ def _calibration_story(
             ),
         ]
     )
+    results = result_payload.get("results", [])
+    if isinstance(results, list) and results:
+        benchmark = _json_mapping(_json_mapping(results[0]).get("benchmarks", {}))
+        if benchmark:
+            story.extend(
+                [
+                    Spacer(1, 7),
+                    Paragraph("Benchmark comparativo", styles["ChartTitle"]),
+                    _table(
+                        [
+                            ["Bot neto", "Buy & Hold neto", "Cruce EMA neto", "Exceso vs B&H"],
+                            [
+                                f"{float(aggregate.get('net_return_pct', 0) or 0):+.2f}%",
+                                f"{float(benchmark.get('buy_hold_net_return_pct', 0) or 0):+.2f}%",
+                                f"{float(benchmark.get('ema_crossover_net_return_pct', 0) or 0):+.2f}%",
+                                f"{float(benchmark.get('bot_excess_vs_buy_hold_pct', 0) or 0):+.2f}%",
+                            ],
+                        ],
+                        [43.5 * mm] * 4,
+                    ),
+                ]
+            )
     return story
 
 

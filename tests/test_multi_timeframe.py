@@ -74,7 +74,7 @@ def test_strict_gate_caps_buy_when_weekly_macro_is_against() -> None:
     assert decision.operation_probability == 39.0
     assert decision.probability_up == 72.0
     assert decision.probability_down == 28.0
-    assert decision.alert == "⚠️ RIESGO ALTO / TENDENCIA MACRO EN CONTRA: EVITAR OPERACIÓN"
+    assert decision.alert == "⚠️ RIESGO ALTO / RÉGIMEN SIN VENTAJA: EVITAR OPERACIÓN"
 
 
 def test_strict_gate_leaves_monthly_countertrend_short_to_tactical_policy() -> None:
@@ -177,6 +177,19 @@ def test_risk_veto_increases_short_term_uncertainty() -> None:
     assert vetoed[-1].probability_range == normal[-1].probability_range
 
 
+def test_long_horizons_are_decoupled_from_intraday_probability() -> None:
+    frame = add_context_indicators(_ohlcv(pd.date_range("2025-01-01", periods=260, freq="B"), [30 + item * 0.1 for item in range(260)]))
+    price = float(frame.iloc[-1]["Close"])
+
+    bearish_intraday = calculate_horizon_projections(20.0, False, price, frame, frame, frame, frame, frame)
+    bullish_intraday = calculate_horizon_projections(80.0, False, price, frame, frame, frame, frame, frame)
+
+    assert bearish_intraday[0].probability_up != bullish_intraday[0].probability_up
+    assert bearish_intraday[2].probability_up == bullish_intraday[2].probability_up
+    assert bearish_intraday[-2].probability_up == bullish_intraday[-2].probability_up
+    assert bearish_intraday[-1].engine_name == "Táctico / fundamental"
+
+
 def test_execution_levels_are_positive_and_strictly_ordered() -> None:
     frame = add_context_indicators(_ohlcv(pd.date_range("2025-01-01", periods=300, freq="B"), [30 + item * 0.03 for item in range(300)]))
     last_price = float(frame.iloc[-1]["Close"])
@@ -196,6 +209,10 @@ def test_execution_levels_are_positive_and_strictly_ordered() -> None:
         levels.entry_low - levels.stop_atr_multiple * levels.atr_5m,
         2,
     )
+    assert levels.take_profit_1_reward_risk >= 1.5
+    assert (levels.take_profit_1 - levels.entry_high) / (
+        levels.entry_high - levels.stop_loss
+    ) >= 1.5
 
 
 def test_double_bottom_target_replaces_nearby_intraday_tp1() -> None:
@@ -218,6 +235,10 @@ def test_double_bottom_target_replaces_nearby_intraday_tp1() -> None:
     assert levels.take_profit_2 >= levels.take_profit_1
     assert levels.pattern_target_applied
     assert levels.pattern_target_label == "Doble suelo 5m"
+    assert levels.take_profit_1_reward_risk >= 1.5
+    assert (levels.take_profit_1 - levels.entry_high) / (
+        levels.entry_high - levels.stop_loss
+    ) >= 1.5
 
 
 def test_execution_levels_reverse_cleanly_for_bearish_bias() -> None:
@@ -235,6 +256,10 @@ def test_execution_levels_reverse_cleanly_for_bearish_bias() -> None:
     assert levels.direction == "SHORT"
     assert last_price <= levels.entry_high < levels.stop_loss
     assert 0 < levels.take_profit_2 <= levels.take_profit_1 <= last_price
+    assert levels.take_profit_1_reward_risk >= 1.5
+    assert (levels.entry_high - levels.take_profit_1) / (
+        levels.stop_loss - levels.entry_high
+    ) >= 1.5
 
 
 def test_15_day_projection_has_business_dates_and_positive_daily_envelopes() -> None:
@@ -259,7 +284,11 @@ def test_15_day_projection_has_business_dates_and_positive_daily_envelopes() -> 
     assert all(left.session_date < right.session_date for left, right in zip(points, points[1:]))
     assert all(0 < item.daily_floor <= item.expected_close <= item.daily_ceiling for item in points)
     assert all(item.atr_value > 0 for item in points)
-    assert points[-1].daily_ceiling - points[-1].daily_floor > points[0].daily_ceiling - points[0].daily_floor
+    assert all(
+        item.daily_ceiling - item.daily_floor <= item.atr_value * 1.35 + 0.03
+        for item in points
+    )
+    assert len({round(item.daily_ceiling - item.daily_floor, 2) for item in points}) >= 2
 
 
 def test_15_day_projection_is_reproducible_and_has_historical_fluctuations() -> None:

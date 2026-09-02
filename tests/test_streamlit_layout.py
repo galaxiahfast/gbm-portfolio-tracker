@@ -48,3 +48,14 @@ def test_predictor_tabs_are_dynamic_and_guard_individual_containers() -> None:
         "executive_tab, technical_tab, calibration_tab = st.tabs("
     )
     assert "Descargar PDF maestro" in source
+
+
+def test_predictor_uses_honest_score_nomenclature_until_empirically_calibrated() -> None:
+    app_source = APP_PATH.read_text(encoding="utf-8")
+    engine_path = APP_PATH.parent / "portfolio_tracker" / "analytics" / "technical_probability.py"
+    engine_source = engine_path.read_text(encoding="utf-8")
+
+    assert '"Probabilidad de subida"' not in app_source
+    assert '"Probabilidad de bajada"' not in app_source
+    assert "Score heurístico alcista" in engine_source
+    assert "Pendiente de calibración empírica Brier" in engine_source

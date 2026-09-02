@@ -80,6 +80,10 @@ def test_fundamental_scoring_is_symmetric_and_event_veto_is_objective() -> None:
     assert negative.veto_scope == "ALL"
     assert any(item.kind == "Resultados" for item in negative.events)
     assert all(item.topics for item in negative.news)
+    assert all(0 < item.recency_weight <= 1 for item in negative.news)
+    assert all(item.impact_class in {"BAJO", "MEDIO", "ALTO"} for item in negative.news)
+    assert negative.event_risk_level == "CRÍTICO"
+    assert negative.risk_window_until
 
 
 def test_snapshot_roundtrip_is_canonical_and_lossless() -> None:

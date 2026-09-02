@@ -49,7 +49,8 @@ def test_pdf_report_is_valid_and_contains_executive_and_technical_sections() -> 
     assert "Resumen ejecutivo" in text
     assert "Contexto fundamental y noticias" in text
     assert "Plan de ejecución y riesgo" in text
-    assert "Probabilidades y precios por horizonte" in text
+    assert "Scores y precios por horizonte" in text
+    assert "Pendiente de calibraci" in text
     assert "Trayectoria proyectada - proximos 15 dias habiles" in text
     assert "Graficas tecnicas reales" in text
     assert "Bandas de Bollinger y VWAP - 5 min" in text

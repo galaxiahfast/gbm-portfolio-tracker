@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-LAST_VERIFIED_TESTS = 77
-LAST_VERIFIED_DATE = "2026-08-29"
+LAST_VERIFIED_TESTS = 89
+LAST_VERIFIED_DATE = "2026-08-31"
 
 
 @dataclass(frozen=True, slots=True)
