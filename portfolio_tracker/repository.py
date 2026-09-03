@@ -11,6 +11,7 @@ from typing import Any
 
 from .config import INITIAL_CAPITAL_USD
 from .db import Database
+from .services.zone_forward import ZonePrediction
 from .models import CashMovementKind, FxQuote, PriceQuote, TradeDraft, money
 
 
@@ -38,6 +39,22 @@ def _decimal_or_none(value: Any) -> Decimal | None:
 class PortfolioRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
+
+    def ensure_zone_forward_schema(self) -> None:
+        from .services.zone_forward import ensure_schema
+        ensure_schema(self.database)
+
+    def save_prediction(self, prediction: ZonePrediction, *, now=None) -> bool:
+        from .services.zone_forward import save_prediction
+        return save_prediction(self.database, prediction, now=now)
+
+    def resolve_predictions(self, provider, *, now=None):
+        from .services.zone_forward import resolve_predictions
+        return resolve_predictions(self.database, provider, now=now)
+
+    def zone_predictions(self):
+        from .services.zone_forward import read_predictions
+        return read_predictions(self.database)
 
     def ensure_initial_capital(self) -> None:
         """Registra $921.05 USD una sola vez, aun despues de reiniciar."""
@@ -529,21 +546,67 @@ class PortfolioRepository:
                 invalid.append(int(row["id"]))
         return len(rows) - len(invalid), tuple(invalid)
 
-    def latest_backtest_parameters(self) -> dict[str, Any] | None:
+    def latest_backtest_parameters(self, *, symbol: str, engine_version: str) -> dict[str, Any] | None:
+        """Only approved, hash-verified replay evidence for this asset/version.
+
+        Sidecar metadata must agree with the hashed payload. Legacy/rejected
+        runs stay in the audit history but can never configure live analysis.
+        """
+        import math
+        from dataclasses import fields
+        from .analytics.backtesting import BacktestConfig, PerformanceMetrics, evaluate_capital_preservation, ENGINE_VERSION
+        from .analytics.causal_core import causal_revision
+        from .analytics.replay import REPLAY_CONTRACT
+        symbol = symbol.strip().upper()
+        if not symbol or not engine_version:
+            raise ValueError('Activo y versión validada son obligatorios.')
+        if engine_version != ENGINE_VERSION:
+            return None
+        revision = causal_revision()
         with self.database.connect() as connection:
-            row = connection.execute(
-                """
-                SELECT parameters_json FROM backtest_runs
-                ORDER BY created_at DESC, id DESC LIMIT 1
-                """
-            ).fetchone()
-        if not row:
-            return None
-        try:
-            payload = json.loads(str(row["parameters_json"]))
-        except json.JSONDecodeError:
-            return None
-        return payload if isinstance(payload, dict) else None
+            rows = connection.execute(
+                """SELECT * FROM backtest_runs WHERE status='APPROVED' AND engine_version=?
+                   ORDER BY created_at DESC, id DESC LIMIT 100""", (engine_version,)
+            ).fetchall()
+        for row in rows:
+            try:
+                if hashlib.sha256(row['payload_json'].encode()).hexdigest() != row['payload_sha256']:
+                    continue
+                payload = json.loads(row['payload_json'])
+                parameters = json.loads(row['parameters_json'])
+                symbols = json.loads(row['symbols_json'])
+                if (payload['engine_version'] != engine_version or payload['core_sha256'] != revision
+                    or payload['replay_contract'] != REPLAY_CONTRACT
+                    or payload['dataset_sha256'] != row['dataset_sha256']
+                    or not payload['aggregate_decision'].startswith('APROBADO')
+                    or set(symbols) != {r['symbol'] for r in payload['results']} or symbol not in symbols):
+                    continue
+                config_values = payload['config']
+                if set(config_values) != {f.name for f in fields(BacktestConfig)}:
+                    continue
+                if any(parameters.get(k) != v for k,v in config_values.items()):
+                    continue
+                if not all(isinstance(v,(int,float)) and math.isfinite(v) for v in config_values.values()):
+                    continue
+                config = BacktestConfig(**config_values)
+                matching = [r for r in payload['results'] if r['symbol']==symbol]
+                if len(matching)!=1:
+                    continue
+                result = matching[0]
+                if result.get('replay_contract') != REPLAY_CONTRACT or not result['decision'].startswith('APROBADO'):
+                    continue
+                metrics = PerformanceMetrics(**result['validation'])
+                if not all(v is None or (isinstance(v,(int,float)) and math.isfinite(v))
+                           for v in result['validation'].values()):
+                    continue
+                if metrics.trades != metrics.wins+metrics.losses or metrics.setups < metrics.trades:
+                    continue
+                if not evaluate_capital_preservation(metrics,config)[0].startswith('APROBADO'):
+                    continue
+                return dict(config_values)
+            except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+                continue
+        return None
 
     @staticmethod
     def _live_observation_payload(
@@ -556,6 +619,11 @@ class PortfolioRepository:
         predicted_direction: str,
         parameters_json: str,
     ) -> str:
+        """Historical v1 serialization only; never certifies v2 live outcomes.
+
+        Kept for identifying old audit evidence. New writes and all consumers
+        use model_observations.forecast_digest/resolution_digest instead.
+        """
         return json.dumps(
             {
                 "symbol": symbol,
@@ -576,197 +644,218 @@ class PortfolioRepository:
         *,
         symbol: str,
         observed_at: datetime,
+        source_bar_at: datetime,
         reference_price: Decimal,
         raw_probability_up: Decimal,
         parameters_json: str,
         horizon_minutes: int = 390,
     ) -> bool:
-        normalized_symbol = symbol.strip().upper()
-        observed_text = observed_at.astimezone(timezone.utc).isoformat()
-        price_text = str(reference_price)
-        probability_text = str(raw_probability_up)
-        direction = "UP" if raw_probability_up >= Decimal("0.5") else "DOWN"
-        canonical = self._live_observation_payload(
-            symbol=normalized_symbol,
-            observed_at=observed_text,
-            horizon_minutes=horizon_minutes,
-            reference_price=price_text,
-            raw_probability_up=probability_text,
-            predicted_direction=direction,
-            parameters_json=parameters_json,
+        """Record a forecast at emission, referencing a known closed 5m bar.
+
+        source_bar_at denotes the source bar CLOSE, not its open label.
+        available_at is the immutable target close, never a later spot quote.
+        """
+        from .services.model_observations import (
+            VERSION, POLICY, maturity, utc_timestamp, is_regular_close,
+            forecast_digest, canonical,
         )
-        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        observed = utc_timestamp(observed_at)
+        source = utc_timestamp(source_bar_at)
+        if not source <= observed < source + timedelta(minutes=5) or not is_regular_close(source):
+            raise ValueError("El precio de referencia debe provenir de una vela cerrada reciente (menos de 5 min).")
+        if not reference_price.is_finite() or reference_price <= 0:
+            raise ValueError("Precio de referencia inválido.")
+        if not raw_probability_up.is_finite() or not Decimal(0) <= raw_probability_up <= Decimal(1):
+            raise ValueError("Probabilidad fuera de [0, 1].")
+        parameters = json.loads(parameters_json)
+        if not isinstance(parameters, dict):
+            raise ValueError("Los parámetros del modelo deben ser un objeto JSON.")
+        symbol = symbol.strip().upper()
+        if not symbol:
+            raise ValueError("Falta el símbolo del pronóstico.")
+        row = dict(
+            symbol=symbol, observed_at=observed.isoformat(),
+            available_at=maturity(observed, horizon_minutes).isoformat(),
+            horizon_minutes=horizon_minutes, source_bar_at=source.isoformat(),
+            reference_price=str(reference_price), raw_probability_up=str(raw_probability_up),
+            predicted_direction="UP" if raw_probability_up >= Decimal("0.5") else "DOWN",
+            parameters_json=canonical(parameters), integrity_version=VERSION,
+            horizon_policy=POLICY, created_at=_utc_now().isoformat(),
+        )
+        row["observation_sha256"] = forecast_digest(row)
+        row["resolution_status"] = "PENDING"
         with self.database.transaction() as connection:
-            cursor = connection.execute(
-                """
-                INSERT OR IGNORE INTO live_model_observations(
-                    symbol, observed_at, horizon_minutes, reference_price,
-                    raw_probability_up, predicted_direction, parameters_json,
-                    observation_sha256, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    normalized_symbol,
-                    observed_text,
-                    horizon_minutes,
-                    price_text,
-                    probability_text,
-                    direction,
-                    parameters_json,
-                    digest,
-                    _utc_now().isoformat(),
-                ),
+            # Reruns must not manufacture independent samples from the same bar.
+            duplicate = connection.execute(
+                """SELECT 1 FROM live_model_observations
+                   WHERE symbol=? AND source_bar_at=? AND horizon_minutes=?
+                     AND integrity_version=2 LIMIT 1""",
+                (symbol, row["source_bar_at"], horizon_minutes),
+            ).fetchone()
+            if duplicate:
+                return False
+            names = tuple(row)
+            connection.execute(
+                f"INSERT INTO live_model_observations({','.join(names)}) VALUES ({','.join('?' for _ in names)})",
+                tuple(row[name] for name in names),
             )
-            return cursor.rowcount == 1
+        return True
 
     def resolve_live_model_observations(
         self,
         *,
         symbol: str,
-        current_price: Decimal,
         current_as_of: datetime,
+        historical_bars=None,
+        source: str = "yfinance:5m:raw-close",
+        current_price: Decimal | None = None,
     ) -> int:
-        normalized_symbol = symbol.strip().upper()
-        current_utc = current_as_of.astimezone(timezone.utc)
+        """Resolve only exact historical closes. Missing bars remain pending.
+
+        current_as_of is processing time, not the last quote time.
+        Legacy current_price calls are explicitly prohibited.
+        """
+        from .services.model_observations import (
+            utc_timestamp, is_regular_close, exact_closed_prices,
+            valid_observation, resolution_digest,
+        )
+        if current_price is not None:
+            raise ValueError("No se permite resolver con precio actual; proporciona velas históricas de 5m.")
+        if not source or not isinstance(source, str):
+            raise ValueError("Falta la procedencia del precio histórico.")
+        now = utc_timestamp(current_as_of)
+        prices = exact_closed_prices(historical_bars, now)
         resolved = 0
         with self.database.transaction() as connection:
             rows = connection.execute(
-                """
-                SELECT * FROM live_model_observations
-                WHERE symbol = ? AND resolved_at IS NULL
-                ORDER BY observed_at ASC
-                """,
-                (normalized_symbol,),
+                """SELECT * FROM live_model_observations
+                   WHERE symbol=? AND integrity_version=2 AND resolution_status='PENDING'
+                     AND available_at<=? ORDER BY available_at, id""",
+                (symbol.strip().upper(), now.isoformat()),
             ).fetchall()
-            for row in rows:
-                observed = datetime.fromisoformat(str(row["observed_at"]))
-                horizon = timedelta(minutes=int(row["horizon_minutes"]))
-                if current_utc - observed < horizon:
+            for stored in rows:
+                row = dict(stored)
+                # Never sign an already altered pending observation.
+                if not valid_observation(row):
                     continue
-                reference = Decimal(str(row["reference_price"]))
-                outcome_up = current_price > reference
-                success = (
-                    outcome_up and row["predicted_direction"] == "UP"
-                ) or (
-                    not outcome_up and row["predicted_direction"] == "DOWN"
-                )
+                due = row["available_at"]
+                if not is_regular_close(due):
+                    row.update(resolution_status="INVALID_MARKET_CLOSED", resolved_at=now.isoformat())
+                elif due not in prices:
+                    continue
+                else:
+                    outcome = Decimal(prices[due])
+                    up = int(outcome > Decimal(row["reference_price"]))
+                    row.update(
+                        outcome_price=str(outcome), outcome_up=up,
+                        successful=int((row["predicted_direction"] == "UP") == bool(up)),
+                        resolved_at=now.isoformat(), outcome_bar_at=due,
+                        outcome_source=source, resolution_status="RESOLVED",
+                    )
+                    resolved += 1
+                row["resolution_sha256"] = resolution_digest(row)
                 connection.execute(
-                    """
-                    UPDATE live_model_observations
-                    SET outcome_price = ?, outcome_up = ?, successful = ?, resolved_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        str(current_price),
-                        int(outcome_up),
-                        int(success),
-                        current_utc.isoformat(),
-                        int(row["id"]),
-                    ),
+                    """UPDATE live_model_observations
+                       SET outcome_price=:outcome_price, outcome_up=:outcome_up,
+                           successful=:successful, resolved_at=:resolved_at,
+                           outcome_bar_at=:outcome_bar_at, outcome_source=:outcome_source,
+                           resolution_status=:resolution_status, resolution_sha256=:resolution_sha256
+                       WHERE id=:id AND resolution_status='PENDING'""", row,
                 )
-                resolved += 1
         return resolved
 
-    def live_model_stats(self, symbol: str, limit: int = 100) -> dict[str, float | int]:
+    def _verified_live_results(self, symbol: str, *, horizon_minutes=None, limit=2000):
+        from .services.model_observations import valid_observation
+        query = """SELECT * FROM live_model_observations WHERE symbol=?
+                   AND integrity_version=2 AND resolution_status='RESOLVED'"""
+        values = [symbol.strip().upper()]
+        if horizon_minutes is not None:
+            query += " AND horizon_minutes=?"
+            values.append(int(horizon_minutes))
+        query += " ORDER BY resolved_at DESC, id DESC LIMIT ?"
+        values.append(max(1, min(int(limit), 10000)))
         with self.database.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT raw_probability_up, outcome_up, successful
-                FROM live_model_observations
-                WHERE symbol = ? AND resolved_at IS NOT NULL
-                ORDER BY resolved_at DESC, id DESC LIMIT ?
-                """,
-                (symbol.strip().upper(), max(1, min(limit, 500))),
-            ).fetchall()
+            rows = connection.execute(query, values).fetchall()
+        return [row for row in rows if valid_observation(row)]
+
+    def live_model_stats(self, symbol: str, limit: int = 100) -> dict[str, float | int | None]:
+        rows = self._verified_live_results(symbol, limit=max(1, min(limit, 500)))
         total = len(rows)
-        wins = sum(int(row["successful"] or 0) for row in rows)
+        wins = sum(int(row["successful"]) for row in rows)
         accuracy = wins / total if total else 0.0
-        brier = (
-            sum(
-                (
-                    float(row["raw_probability_up"])
-                    - float(int(row["outcome_up"] or 0))
-                ) ** 2
-                for row in rows
-            ) / total
-            if total
-            else 0.25
-        )
+        from .analytics.probability_calibration import CalibrationSample, chronological_split
+        timed = [CalibrationSample((float(r['raw_probability_up']),), int(r['outcome_up']),
+                 *(datetime.fromisoformat(r[k]) for k in ('observed_at','available_at','resolved_at')))
+                 for r in rows]
+        holdout = chronological_split(timed).holdout
+        brier = (sum((r.probabilities[0]-r.outcome)**2 for r in holdout)/len(holdout)
+                 if holdout else None)
         learning_weight = min(total / 40, 1.0)
-        adaptive_threshold = 0.55 + max(
-            -0.03,
-            min(0.10, (0.55 - accuracy) * 0.20 * learning_weight),
-        )
-        return {
-            "resolved": total,
-            "wins": wins,
-            "accuracy": accuracy,
-            "brier_score": brier,
-            "adaptive_threshold": adaptive_threshold,
-        }
+        adaptive_threshold = 0.55 + max(-0.03, min(0.10, (0.55 - accuracy) * 0.20 * learning_weight))
+        return dict(resolved=total, wins=wins, accuracy=accuracy,
+                    brier_score=brier, adaptive_threshold=adaptive_threshold,
+                    brier_holdout_samples=len(holdout))
 
     def live_model_calibration_samples(
-        self,
-        symbol: str,
-        *,
-        horizon_minutes: int = 390,
-        limit: int = 2_000,
+        self, symbol: str, *, horizon_minutes: int = 390, limit: int = 2000,
     ) -> tuple[tuple[float, int], ...]:
-        """Entrega solo observaciones resueltas para calibración causal."""
+        """Unsigned legacy or tampered resolutions never enter calibration."""
+        rows = self._verified_live_results(symbol, horizon_minutes=horizon_minutes, limit=limit)
+        rows.sort(key=lambda row: datetime.fromisoformat(row["observed_at"]))
+        return tuple((float(row["raw_probability_up"]), int(row["outcome_up"])) for row in rows)
 
+    def live_scenario_calibration_samples(
+        self, symbol: str, *, horizon_minutes: int, model_id: str,
+        as_of: datetime, limit: int = 10000,
+    ):
+        """One signed model/target; emission order and point-in-time labels.
+
+        v2 binary records without frozen range/vector are never reinterpreted.
+        The calibrator performs 60/20/20 splitting and temporal purging.
+        """
+        from .analytics.probability_calibration import CalibrationSample
+        from .services.model_observations import valid_observation, utc_timestamp
+        from .services.scenario_calibration import validate_contract, outcome_class
+        cutoff = utc_timestamp(as_of)
         with self.database.connect() as connection:
             rows = connection.execute(
-                """
-                SELECT *
-                FROM live_model_observations
-                WHERE symbol = ? AND horizon_minutes = ?
-                  AND resolved_at IS NOT NULL AND outcome_up IS NOT NULL
-                ORDER BY resolved_at DESC, id DESC LIMIT ?
-                """,
-                (
-                    symbol.strip().upper(),
-                    int(horizon_minutes),
-                    max(1, min(int(limit), 10_000)),
-                ),
+                """SELECT * FROM live_model_observations
+                   WHERE symbol=? AND horizon_minutes=? AND integrity_version=2
+                     AND resolution_status='RESOLVED' AND resolved_at<=?
+                     AND CASE WHEN json_valid(parameters_json)
+                         THEN json_extract(parameters_json, '$.scenario_contract.model_id') END = ?
+                   ORDER BY observed_at DESC, id DESC LIMIT ?""",
+                (symbol.strip().upper(), horizon_minutes, cutoff.isoformat(), model_id,
+                 max(1, min(limit, 10000))),
             ).fetchall()
-        valid_samples: list[tuple[float, int]] = []
+        samples = []
         for row in rows:
-            canonical = self._live_observation_payload(
-                symbol=str(row["symbol"]),
-                observed_at=str(row["observed_at"]),
-                horizon_minutes=int(row["horizon_minutes"]),
-                reference_price=str(row["reference_price"]),
-                raw_probability_up=str(row["raw_probability_up"]),
-                predicted_direction=str(row["predicted_direction"]),
-                parameters_json=str(row["parameters_json"]),
-            )
-            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            if digest == str(row["observation_sha256"]):
-                valid_samples.append(
-                    (float(row["raw_probability_up"]), int(row["outcome_up"]))
-                )
-        return tuple(valid_samples)
+            if not valid_observation(row):
+                continue
+            try:
+                contract = json.loads(row['parameters_json'])['scenario_contract']
+                vector, low, high = validate_contract(contract)
+                if contract['model']['symbol'] != row['symbol'] or contract['model']['horizon_minutes'] != row['horizon_minutes']:
+                    continue
+                if abs(vector[0]-float(row['raw_probability_up'])) > 1e-9:
+                    continue
+                observed, available, resolved = [utc_timestamp(row[k]).to_pydatetime()
+                    for k in ('observed_at', 'available_at', 'resolved_at')]
+                if not observed < available <= resolved <= cutoff:
+                    continue
+                samples.append(CalibrationSample(vector, outcome_class(row['outcome_price'],low,high),
+                                                  observed, available, resolved))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return tuple(sorted(samples, key=lambda sample: sample.observed_at))
 
     def verify_live_model_observations(self) -> tuple[int, tuple[int, ...]]:
+        """Invalid IDs include legacy rows whose outcomes cannot be certified."""
+        from .services.model_observations import valid_observation
         with self.database.connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM live_model_observations"
-            ).fetchall()
-        invalid: list[int] = []
-        for row in rows:
-            canonical = self._live_observation_payload(
-                symbol=str(row["symbol"]),
-                observed_at=str(row["observed_at"]),
-                horizon_minutes=int(row["horizon_minutes"]),
-                reference_price=str(row["reference_price"]),
-                raw_probability_up=str(row["raw_probability_up"]),
-                predicted_direction=str(row["predicted_direction"]),
-                parameters_json=str(row["parameters_json"]),
-            )
-            calculated = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            if calculated != str(row["observation_sha256"]):
-                invalid.append(int(row["id"]))
-        return len(rows) - len(invalid), tuple(invalid)
+            rows = connection.execute("SELECT * FROM live_model_observations").fetchall()
+        invalid = tuple(int(row["id"]) for row in rows if not valid_observation(row))
+        return len(rows) - len(invalid), invalid
 
     def record_fundamental_news_snapshot(
         self,

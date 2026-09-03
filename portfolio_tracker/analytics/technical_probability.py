@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 import math
 
 import pandas as pd
+from portfolio_tracker.analytics.closed_bars import select_last_closed_bar, resample_closed, utc
+from portfolio_tracker.analytics.decision_engines import apply_hierarchy, adx_hysteresis, RegimeEngine, Permission
+from portfolio_tracker.analytics.causal_core import INTRADAY_READY
+from portfolio_tracker.analytics.technical_validity import (
+    TechnicalDataVeto, validate_raw_tail, current_indicator_suffix, validate_freshness,
+)
 
 from portfolio_tracker.analytics.chart_patterns import (
     ChartPattern,
@@ -34,6 +40,8 @@ from portfolio_tracker.analytics.multi_timeframe import (
 
 
 class TechnicalSignal(StrEnum):
+    HOLD_LONG = "HOLD_LONG"
+    HOLD_SHORT = "HOLD_SHORT"
     BUY = "BUY"
     SELL = "SELL"
     WATCH_BUY = "WATCH_BUY"
@@ -218,6 +226,27 @@ class ProbabilityAnalysis:
     fundamental_news_audit: tuple[str, ...] = ()
     market_regime: str = "SIN CLASIFICAR"
     position_size_policy: str = "CONDICIONAL"
+    four_hour_indicators: pd.DataFrame = field(default_factory=pd.DataFrame)
+    macro_permission: str = "NO_TRADE"
+    macro_trending: bool = False
+    hierarchy_detail: str = ""
+    structural_support: float = 0.0
+    structural_resistance: float = 0.0
+    position_state: str = "FLAT"
+    position_management: str = ""
+    buy_levels: ExecutionLevels | None = None
+    sell_levels: ExecutionLevels | None = None
+
+    @property
+    def source_bar_closed_at(self) -> datetime:
+        """When last_price became knowable, NOT emission or horizon maturity.
+
+        as_of remains the 5m OPEN label for existing position-state consumers.
+        Live feedback must use a separate wall-clock emission timestamp and
+        resolve against exact historical closes, never this latest price.
+        """
+        from portfolio_tracker.services.model_observations import utc_timestamp
+        return (utc_timestamp(self.as_of) + pd.Timedelta(minutes=5)).to_pydatetime()
 
     @property
     def has_empirical_probability(self) -> bool:
@@ -353,7 +382,10 @@ def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
     average_loss = losses.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
     relative_strength = average_gain / average_loss.replace(0, float("nan"))
     rsi = 100 - (100 / (1 + relative_strength))
-    return rsi.where(average_loss != 0, 100.0)
+    # No losses is only RSI=100 when there ARE gains. 0/0 is undefined.
+    rsi = rsi.where(~((average_loss == 0) & (average_gain > 0)),100.0)
+    no_movement = delta.abs().rolling(period,min_periods=period).sum() == 0
+    return rsi.mask(no_movement)
 
 
 def _add_macd(result: pd.DataFrame) -> None:
@@ -841,14 +873,35 @@ def analyze_probability(
     daily: pd.DataFrame,
     *,
     atr_stop_multiple: float = 2.25,
+    as_of_time: datetime | None = None,
+    previous_macro_trending: bool | None = None,
+    require_fresh: bool = False,
 ) -> ProbabilityAnalysis:
+    """Analyze an explicit data cut; undefined newest inputs raise TechnicalDataVeto.
+
+    require_fresh=True is mandatory for the live UI. Offline/history callers
+    may disable exchange-clock recency, but never indicator validity or the
+    prohibition on falling back to older valid candles.
+    """
+    cutoff = utc(as_of_time)
+    intraday = select_last_closed_bar(intraday, "5m", cutoff)
+    daily = select_last_closed_bar(daily, "1d", cutoff)
     if len(intraday) < 40:
         raise ValueError("Se requieren al menos 40 velas intradía utilizables.")
     if len(daily) < 35:
         raise ValueError("Se requieren al menos 35 velas diarias utilizables.")
-    intraday_indicators = add_intraday_indicators(intraday).dropna(subset=["StochRSI_K", "StochRSI_D", "BB_upper", "BB_middle", "BB_lower", "Volume_MA20", "MACD", "MACD_signal", "MACD_histogram", "VWAP", "ADX14", "OBV", "Ichimoku_Tenkan", "Ichimoku_Kijun", "Ichimoku_Senkou_A", "Ichimoku_Senkou_B"])
-    daily_indicators = add_daily_indicators(daily).dropna(subset=["EMA9", "EMA21", "MACD", "MACD_signal", "MACD_histogram", "Ichimoku_Tenkan", "Ichimoku_Kijun", "Ichimoku_Senkou_A", "Ichimoku_Senkou_B"])
-    completed_intraday = intraday_indicators[intraday_indicators["Volume"] > 0]
+    validate_raw_tail(intraday,'5m')
+    validate_raw_tail(daily,'Diario')
+    if require_fresh:
+        validate_freshness(intraday,daily,cutoff)
+    intraday_indicators = current_indicator_suffix(
+        add_intraday_indicators(intraday), [*INTRADAY_READY,'RSI14'], '5m')
+    daily_raw = add_daily_indicators(daily)
+    # ADX needs the entire closed history, not the tail left by Ichimoku warmup.
+    _add_adx(daily_raw)
+    daily_indicators = current_indicator_suffix(daily_raw,
+        ["EMA9", "EMA21", "MACD", "MACD_signal", "MACD_histogram", "Ichimoku_Tenkan", "Ichimoku_Kijun", "Ichimoku_Senkou_A", "Ichimoku_Senkou_B", "ADX14"], 'Diario')
+    completed_intraday = intraday_indicators
     if len(completed_intraday) < 13 or daily_indicators.empty:
         raise ValueError("No hay suficientes velas para completar los indicadores.")
     intraday_indicators = intraday_indicators.loc[: completed_intraday.index[-1]].copy()
@@ -888,14 +941,15 @@ def analyze_probability(
     obv_state, obv_price_change_pct = _obv_divergence(intraday_indicators)
     latest_timestamp = pd.Timestamp(intraday_indicators.index[-1])
     completed_daily_source = daily[pd.Index(daily.index).date < latest_timestamp.date()]
-    hourly_indicators = add_context_indicators(
-        resample_ohlcv(intraday.loc[: latest_timestamp], "60min")
-    )
+    hourly_indicators = add_context_indicators(resample_closed(intraday, "1h", cutoff))
+    four_hour_indicators = add_context_indicators(resample_closed(intraday, "4h", cutoff))
+    if not math.isfinite(float(daily_indicators.ADX14.iloc[-1])):
+        raise TechnicalDataVeto('ADX diario indefinido.',as_of=daily_indicators.index[-1])
     weekly_indicators = add_context_indicators(
-        resample_ohlcv(completed_daily_source, "W-FRI")
+        select_last_closed_bar(resample_ohlcv(completed_daily_source, "W-FRI"), "1wk", cutoff)
     )
     monthly_indicators = add_context_indicators(
-        resample_ohlcv(completed_daily_source, "ME")
+        select_last_closed_bar(resample_ohlcv(completed_daily_source, "ME"), "1mo", cutoff)
     )
     weekly_trend = classify_macro_trend(weekly_indicators)
     monthly_trend = classify_macro_trend(monthly_indicators)
@@ -1010,6 +1064,15 @@ def analyze_probability(
         or probability_up < 50.0
         else "LONG"
     )
+    macro_memory = False if previous_macro_trending is None else previous_macro_trending
+    if previous_macro_trending is None:
+        for value in daily_indicators.ADX14:
+            macro_memory = adx_hysteresis(value, macro_memory)
+    regime = RegimeEngine().evaluate(weekly_indicators, daily_indicators, four_hour_indicators, macro_memory)
+    if regime.permission == Permission.LONG_ONLY:
+        planned_direction = "LONG"
+    elif regime.permission == Permission.SHORT_ONLY:
+        planned_direction = "SHORT"
     tactical_short, exposure_factor, required_volume_ratio = (
         _monthly_execution_policy(planned_direction, monthly_trend)
     )
@@ -1023,7 +1086,10 @@ def analyze_probability(
         if planned_direction == "LONG"
         else macd_state_5m is MomentumState.BEARISH
     )
-    trend_regime_confirmed = adx > 25 and ema_regime_aligned and macd_regime_aligned
+    adx_memory = False
+    for closed_adx in intraday_indicators.ADX14:
+        adx_memory = adx_hysteresis(closed_adx, adx_memory)
+    trend_regime_confirmed = adx_memory and ema_regime_aligned and macd_regime_aligned
     if adx < 20:
         exposure_factor = min(exposure_factor, 0.25)
     elif not trend_regime_confirmed:
@@ -1220,4 +1286,14 @@ def analyze_probability(
         signal_rejected=rejected or decision.risk_veto, score_breakdown=breakdown, pivots=pivots, suggested_level=suggested_level, verdict=verdict, observations=observations, warnings=tuple(warnings), intraday_indicators=intraday_indicators, hourly_indicators=hourly_indicators, daily_indicators=daily_indicators, weekly_indicators=weekly_indicators, monthly_indicators=monthly_indicators, chart_patterns=chart_patterns, chart_pattern_impact=pattern_influence.impact_points, chart_pattern_veto=pattern_influence.veto, horizon_projections=horizon_projections, execution_levels=execution_levels, daily_projection=daily_projection, raw_probability_up=probability_up, market_regime=("TENDENCIA CONFIRMADA" if trend_regime_confirmed else "RANGO / VETO" if adx < 20 else "TRANSICIÓN"), position_size_policy=("NORMAL" if trend_regime_confirmed else "REDUCIDA 25%" if adx < 20 else "REDUCIDA 50% / ESPERAR"),
     )
     validate_probability_analysis(analysis)
-    return analysis
+    # Both scenarios are always available; neither constitutes an order.
+    from dataclasses import replace
+    scenario_args = dict(last_price=price, projections=horizon_projections,
+                         additional_supports=tuple(support_candidates),
+                         additional_resistances=tuple(resistance_candidates),
+                         probability_up=probability_up, intraday_atr=atr_5m,
+                         atr_stop_multiple=atr_stop_multiple)
+    analysis = replace(analysis, four_hour_indicators=four_hour_indicators,
+                       buy_levels=calculate_execution_levels(**scenario_args, signal="BUY"),
+                       sell_levels=calculate_execution_levels(**scenario_args, signal="SELL"))
+    return apply_hierarchy(analysis, macro_memory)

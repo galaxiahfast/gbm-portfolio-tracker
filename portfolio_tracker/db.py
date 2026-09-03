@@ -202,6 +202,8 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (5, "calibracion_estadistica_backtesting"),
     (6, "realimentacion_progresiva_modelo"),
     (7, "fundamentales_noticias_versionados"),
+    (8, "estado_operativo_persistente"),
+    (9, "observaciones_v2_resolucion_inmutable_causal"),
 )
 
 
@@ -288,6 +290,10 @@ class Database:
                             self._create_live_model_history(connection)
                         elif version == 7:
                             self._create_fundamental_news_history(connection)
+                        elif version == 8:
+                            self._create_operational_history(connection)
+                        elif version == 9:
+                            self._secure_live_model_history(connection)
                     connection.execute(
                         """
                         INSERT INTO schema_migrations(version, name, applied_at)
@@ -307,7 +313,53 @@ class Database:
             self._create_backtest_history(connection)
             self._create_live_model_history(connection)
             self._create_fundamental_news_history(connection)
+            self._create_operational_history(connection)
+            self._secure_live_model_history(connection)
             connection.commit()
+
+    @staticmethod
+    def _secure_live_model_history(connection: sqlite3.Connection) -> None:
+        """Additive v9: preserve legacy rows, never certify unsigned outcomes."""
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(live_model_observations)")}
+        additions = {
+            "integrity_version": "INTEGER NOT NULL DEFAULT 1",
+            "available_at": "TEXT",
+            "source_bar_at": "TEXT",
+            "horizon_policy": "TEXT",
+            "resolution_status": "TEXT NOT NULL DEFAULT 'LEGACY_UNVERIFIED'",
+            "outcome_bar_at": "TEXT",
+            "outcome_source": "TEXT",
+            "resolution_sha256": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(f"ALTER TABLE live_model_observations ADD COLUMN {name} {definition}")
+        # Literal column names only; unrelated accounting tables are untouched.
+        from .services.model_observations import FORECAST_FIELDS
+        changed = " OR ".join(f"NEW.{name} IS NOT OLD.{name}" for name in (*FORECAST_FIELDS, "observation_sha256", "id"))
+        connection.execute(f"""CREATE TRIGGER IF NOT EXISTS live_forecast_immutable
+            BEFORE UPDATE ON live_model_observations
+            WHEN OLD.integrity_version = 2 AND ({changed})
+            BEGIN SELECT RAISE(ABORT, 'live_forecast_immutable'); END""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS live_resolution_immutable
+            BEFORE UPDATE ON live_model_observations
+            WHEN OLD.integrity_version = 2 AND OLD.resolution_status != 'PENDING'
+            BEGIN SELECT RAISE(ABORT, 'live_resolution_immutable'); END""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS live_observation_no_delete
+            BEFORE DELETE ON live_model_observations WHEN OLD.integrity_version = 2
+            BEGIN SELECT RAISE(ABORT, 'live_observation_immutable'); END""")
+        connection.execute("""CREATE INDEX IF NOT EXISTS idx_live_pending_maturity
+            ON live_model_observations(symbol, resolution_status, available_at)""")
+
+    @staticmethod
+    def _create_operational_history(connection: sqlite3.Connection) -> None:
+        connection.execute("""CREATE TABLE IF NOT EXISTS operational_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL, payload_json TEXT NOT NULL,
+            previous_sha256 TEXT NOT NULL, sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )""")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_operational_symbol ON operational_events(symbol, id)")
 
     def _backup_before_migrations(
         self, connection: sqlite3.Connection, target_version: int

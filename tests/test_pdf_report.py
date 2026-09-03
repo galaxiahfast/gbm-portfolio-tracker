@@ -5,6 +5,7 @@ from io import BytesIO
 
 import pandas as pd
 from pypdf import PdfReader
+from tests.market_fixtures import intraday_index as session_index
 
 from portfolio_tracker.analytics.technical_probability import analyze_probability
 from portfolio_tracker.services.pdf_report import (
@@ -31,7 +32,7 @@ def _ohlcv(index: pd.DatetimeIndex, prices: list[float]) -> pd.DataFrame:
 
 
 def _analysis():
-    intraday_index = pd.date_range("2026-08-20 13:30", periods=220, freq="5min", tz="UTC")
+    intraday_index = session_index(220)
     intraday_prices = [40 + item * 0.015 + math.sin(item / 4) * 1.2 for item in range(len(intraday_index))]
     daily_index = pd.date_range("2021-01-01", periods=1400, freq="B")
     daily_prices = [30 + item * 0.025 + math.sin(item / 12) * 1.8 for item in range(len(daily_index))]

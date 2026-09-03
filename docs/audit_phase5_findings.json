@@ -1,0 +1,407 @@
+[
+  {
+    "id": "F01",
+    "priority": "ALTA",
+    "title": "Resultados de predicciones fuera de la cobertura SHA-256",
+    "evidence_type": "REPRODUCIDO",
+    "observation": "El hash de live_model_observations cubre el pronóstico, no outcome_price, outcome_up, successful ni resolved_at. Alterar esos campos conserva la verificación y cambia las muestras de calibración.",
+    "impact": "Se pueden aprobar resultados alterados; no demuestra corrupción del libro contable.",
+    "recommendation": "Resoluciones inmutables con hash enlazado al pronóstico, vencimiento y procedencia del precio; verificar ambas partes antes de calibrar. Un hash sin clave no autentica frente a quien pueda reescribirlo.",
+    "acceptance": "Alterar cualquier dato de resolución debe invalidar su integridad y excluir la muestra.",
+    "probe": "outcome_integrity",
+    "references": [
+      {
+        "path": "portfolio_tracker/repository.py",
+        "anchor": "def _live_observation_payload(",
+        "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+      },
+      {
+        "path": "portfolio_tracker/repository.py",
+        "anchor": "def verify_live_model_observations(",
+        "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+      }
+    ]
+  },
+  {
+    "id": "F02",
+    "priority": "ALTA",
+    "title": "Realimentación con precios posteriores al horizonte anunciado",
+    "evidence_type": "REPRODUCIDO",
+    "observation": "resolve_live_model_observations aplica el precio actual a todas las observaciones vencidas. Usa minutos naturales sin recuperar el cierre exacto: un horizonte de 60 minutos del viernes se resuelve el lunes, 4.320 minutos después. as_of usa apertura de vela aunque el cierre se conoce después.",
+    "impact": "Las etiquetas y el acierto no representan el horizonte anunciado.",
+    "recommendation": "Horizontes de sesión y timestamps observed_at/available_at separados; resolver con el cierre histórico del vencimiento o abstenerse si falta.",
+    "acceptance": "Una resolución tardía conserva el resultado del vencimiento, no el precio actual; probar festivos y medias sesiones.",
+    "probe": "late_horizon",
+    "references": [
+      {
+        "path": "portfolio_tracker/repository.py",
+        "anchor": "def resolve_live_model_observations(",
+        "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+      },
+      {
+        "path": "portfolio_tracker/analytics/technical_probability.py",
+        "anchor": "as_of = latest_timestamp.to_pydatetime()",
+        "reviewed_sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df"
+      }
+    ]
+  },
+  {
+    "id": "F03",
+    "priority": "ALTA",
+    "title": "Etiqueta calibrada sin Brier validado fuera de muestra",
+    "evidence_type": "REPRODUCIDO / METODOLÓGICO",
+    "observation": "El Brier se calcula sobre scores crudos y la isotónica se ajusta sobre las mismas muestras. Con 500 registros y dos bins concede etiqueta calibrada sin holdout independiente. El caso invertido tiene Brier crudo 0,81 y recibe esa etiqueta. La consulta distingue símbolo/horizonte, no versión completa de modelo y parámetros; observaciones solapadas cuentan como muestras.",
+    "impact": "Se confunde ajuste in-sample con fiabilidad validada. El Brier 0,81 del ejemplo es del score crudo, no del calibrador ajustado.",
+    "recommendation": "Separar entrenamiento, calibración y prueba temporal purgada. Medir Brier crudo/calibrado contra baseline por versión, régimen y tamaño efectivo.",
+    "acceptance": "La etiqueta OOS exige prueba independiente; el Brier mostrado corresponde a la salida realmente publicada.",
+    "probe": "calibration_brier",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/probability_calibration.py",
+        "anchor": "def calibrate_probability(",
+        "reviewed_sha256": "08cbe37605006b27315d45e0e940e568883c60c631f3df54fa18f09cb36c6c3c"
+      },
+      {
+        "path": "portfolio_tracker/repository.py",
+        "anchor": "def live_model_calibration_samples(",
+        "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+      }
+    ]
+  },
+  {
+    "id": "F04",
+    "priority": "ALTA",
+    "title": "Calibración binaria aplicada a tres escenarios distintos",
+    "evidence_type": "ESTÁTICO",
+    "observation": "La UI calibra cierre superior al precio de referencia, conserva rango heurístico, recorta subida a 100 menos rango y obtiene bajada por complemento. El calibrador principal consume muestras de 390 minutos generadas por otro score de horizonte. No se regeneran todos los objetivos y etiquetas después.",
+    "impact": "Los porcentajes de subida/rango/bajada no comparten un contrato estadístico validado; el Brier puede no corresponder al valor mostrado.",
+    "recommendation": "Definir eventos excluyentes y calibración multiclase o mostrar el evento binario por separado. Consolidar snapshot final e identidad de score.",
+    "acceptance": "Tabla, decisión y PDF usan el mismo corte, evento y versión sin recortes posteriores etiquetados como calibrados.",
+    "references": [
+      {
+        "path": "app.py",
+        "anchor": "calibrated_up = min(",
+        "reviewed_sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af"
+      },
+      {
+        "path": "app.py",
+        "anchor": "primary_calibration = calibrate_probability(",
+        "reviewed_sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af"
+      }
+    ]
+  },
+  {
+    "id": "F05",
+    "priority": "ALTA",
+    "title": "Asimetría LONG/SHORT en el score del backtest",
+    "evidence_type": "REPRODUCIDO",
+    "observation": "El score inicia con 3*direction; MACD y EMA vuelven a multiplicar por direction y luego todo se multiplica otra vez. Un LONG alineado obtiene 5,5 y su espejo SHORT se rechaza por falta de confluencia.",
+    "impact": "La selección y optimización histórica pueden sesgarse por dirección sin diferencia económica en las entradas.",
+    "recommendation": "Expresar los componentes como evidencia global o como fuerza relativa a la operación; no mezclar ambas convenciones.",
+    "acceptance": "Escenarios espejo con costes simétricos reciben la misma fuerza y aceptación.",
+    "probe": "short_asymmetry",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/backtesting.py",
+        "anchor": "score = 3.0 * direction",
+        "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+      }
+    ]
+  },
+  {
+    "id": "F06",
+    "priority": "ALTA",
+    "title": "Backtest distinto al motor vivo y parámetros globales sin promoción",
+    "evidence_type": "ESTÁTICO",
+    "observation": "El simulador usa reglas diarias propias, no RegimeEngine/SetupEngine/TriggerEngine de 5m/1h/4h. latest_backtest_parameters devuelve la última configuración global, sin selector de símbolo ni aprobación cuantitativa explícita; la UI utiliza su ATR.",
+    "impact": "El histórico no valida la estrategia exacta anunciada; una corrida rechazada o de otro activo puede influir en el plan actual.",
+    "recommendation": "Núcleo causal compartido entre replay y vivo; configuración por modelo/activo/marco con promoción explícita y rollback.",
+    "acceptance": "Replay y vivo producen igual régimen/setup/gatillo; otra emisora o corrida rechazada no cambia la configuración activa.",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/backtesting.py",
+        "anchor": "def _generate_candidates(",
+        "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+      },
+      {
+        "path": "portfolio_tracker/repository.py",
+        "anchor": "def latest_backtest_parameters(",
+        "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+      },
+      {
+        "path": "app.py",
+        "anchor": "calibrated_parameters = repository.latest_backtest_parameters()",
+        "reviewed_sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af"
+      }
+    ]
+  },
+  {
+    "id": "F07",
+    "priority": "ALTA",
+    "title": "Gaps y drawdown subestiman riesgo en la simulación",
+    "evidence_type": "REPRODUCIDO / ESTÁTICO",
+    "observation": "El stop se liquida en su nivel aunque la apertura salte más allá. Caso: entrada 100, stop 97,75, apertura 90, salida 97,75. La curva de calculate_metrics registra cierres de trades, no pérdidas flotantes. El benchmark EMA no aplica liquidación final si queda expuesto.",
+    "impact": "Pérdidas por salto y drawdown intraposición quedan subestimados; los costes finales no son homogéneos.",
+    "recommendation": "Fills conservadores según apertura, spread y slippage; equity marcado a mercado y política de liquidación común.",
+    "acceptance": "Un gap adverso no rellena a precio inaccesible; pérdidas flotantes aparecen en drawdown aunque luego recuperen.",
+    "probe": "gap_fill",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/backtesting.py",
+        "anchor": "def _simulate_trade(",
+        "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+      },
+      {
+        "path": "portfolio_tracker/analytics/backtesting.py",
+        "anchor": "def calculate_metrics(",
+        "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+      },
+      {
+        "path": "portfolio_tracker/analytics/backtesting.py",
+        "anchor": "def _benchmark_metrics(",
+        "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+      }
+    ]
+  },
+  {
+    "id": "F08",
+    "priority": "ALTA",
+    "title": "Velas cerradas sin garantía central de vigencia o finitud",
+    "evidence_type": "REPRODUCIDO / ESTÁTICO",
+    "observation": "dropna conjunto puede retroceder a una vela anterior con indicadores completos. Falta un veto intradía central de vigencia compartido con zonas. Con precio plano el RSI resulta 100 y StochRSI/ADX quedan indefinidos.",
+    "impact": "Puede presentarse un corte antiguo o fallar el análisis; precio plano no equivale a sobrecompra real.",
+    "recommendation": "Validar finitud/antigüedad antes de operar; estado UNKNOWN para indicadores indefinidos y corte explícito, sin retroceso silencioso.",
+    "acceptance": "Series planas, retrasos y huecos producen aviso/veto, no señal fresca; UI y PDF comparten validación.",
+    "probe": "flat_oscillator",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/technical_probability.py",
+        "anchor": "intraday_indicators = add_intraday_indicators(intraday).dropna(",
+        "reviewed_sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df"
+      },
+      {
+        "path": "portfolio_tracker/analytics/technical_probability.py",
+        "anchor": "def _rsi(",
+        "reviewed_sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df"
+      }
+    ]
+  },
+  {
+    "id": "F09",
+    "priority": "ALTA",
+    "title": "Ratios fundamentales con periodos y signos incompatibles",
+    "evidence_type": "REPRODUCIDO / ESTÁTICO",
+    "observation": "OCF/FCF de info se priorizan frente a estados trimestrales y se dividen entre beneficio/revenue trimestrales sin verificar periodos. El caso arroja cash conversion 4 y FCF 20% frente a 1 y 5% trimestrales. Cocientes entre dos negativos pueden parecer favorables; or descarta ceros legítimos.",
+    "impact": "La calidad de beneficios puede recibir bonos injustificados.",
+    "recommendation": "Conservar periodo/unidad/disponibilidad y alinear TTM con TTM o trimestre con trimestre. Tratar pérdidas y caja negativa por separado; distinguir None de cero.",
+    "acceptance": "Periodos incompatibles no producen ratio válido; valores cero se preservan y dos negativos no generan señal favorable.",
+    "probe": "period_mismatch",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/fundamental_news.py",
+        "anchor": "def build_fundamental_snapshot(",
+        "reviewed_sha256": "dc16770bd104e0f1d20ca1333844955359d9dc8737dbb58b8f4332e88efbee2a"
+      }
+    ]
+  },
+  {
+    "id": "F10",
+    "priority": "MEDIA",
+    "title": "EXIT_PENDING no reevalúa el riesgo del remanente",
+    "evidence_type": "ESTÁTICO",
+    "observation": "synchronize_position omite gestión si el estado ya es EXIT_PENDING. Una salida parcial conserva el episodio y ese estado; no vuelve a verificar stop/invalidez por esa rama.",
+    "impact": "La alerta puede seguir mostrando el objetivo previo aunque el riesgo de la cantidad restante haya cambiado. No implica ejecución automática.",
+    "recommendation": "Separar alerta pendiente, posición y remanente; reevaluar riesgo con transiciones idempotentes sin crear fills.",
+    "acceptance": "Después de una salida parcial real, romper el stop actualiza la gestión del saldo.",
+    "references": [
+      {
+        "path": "portfolio_tracker/services/operational_state.py",
+        "anchor": "elif fresh and state[\"status\"] != \"EXIT_PENDING\":",
+        "reviewed_sha256": "74dcd31277e182b142a21f310bd160a7e8625e1cf8e9d60d76659a5974fb479f"
+      }
+    ]
+  },
+  {
+    "id": "F11",
+    "priority": "MEDIA",
+    "title": "Planes duplicados y R:R SHORT calculado en el extremo favorable",
+    "evidence_type": "ESTÁTICO",
+    "observation": "buy_levels/sell_levels se reconstruyen sin confirmed_pattern_target y pueden sustituir al plan original en UI/adopción. SHORT usa entry_high para su R:R, no el extremo inferior desfavorable.",
+    "impact": "La tarjeta puede perder el objetivo de patrón y no garantizar el ratio mínimo en toda la zona SHORT.",
+    "recommendation": "Una única estructura final con procedencia del objetivo y R:R desde el extremo desfavorable o fill real.",
+    "acceptance": "UI/estado/PDF comparten niveles; ambos extremos cumplen el ratio o se especifica el fill requerido.",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/technical_probability.py",
+        "anchor": "scenario_args = dict(",
+        "reviewed_sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df"
+      },
+      {
+        "path": "portfolio_tracker/analytics/multi_timeframe.py",
+        "anchor": "entry_high - 1.5 * (stop_loss - entry_high)",
+        "reviewed_sha256": "d46880ae9184a256e52ef7f1205198749a48e806253af1fb9d4469d12631a3c1"
+      }
+    ]
+  },
+  {
+    "id": "F12",
+    "priority": "MEDIA",
+    "title": "Proyección con festivos no operables y snapshot desalineado",
+    "evidence_type": "REPRODUCIDO / ESTÁTICO",
+    "observation": "pd.bdate_range solo elimina fines de semana; incluye el festivo XNYS 7 de septiembre de 2026. Deriva/semilla dependen del score intradía y ajustes fundamentales/calibración posteriores no regeneran toda la trayectoria y etiquetas.",
+    "impact": "Fechas inválidas y narrativa distinta al escenario. Una trayectoria bootstrap no es precio esperado ni probabilidad calibrada.",
+    "recommendation": "Usar calendario compartido, separar horizonte swing de micro-momentum y generar snapshot tras filtros; etiquetar escenario ilustrativo.",
+    "acceptance": "Quince fechas son sesiones XNYS válidas; metadata y trayectoria corresponden al mismo corte.",
+    "probe": "projection_holidays",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/multi_timeframe.py",
+        "anchor": "future_dates = pd.bdate_range(",
+        "reviewed_sha256": "d46880ae9184a256e52ef7f1205198749a48e806253af1fb9d4469d12631a3c1"
+      },
+      {
+        "path": "portfolio_tracker/analytics/multi_timeframe.py",
+        "anchor": "def calculate_15_day_projection(",
+        "reviewed_sha256": "d46880ae9184a256e52ef7f1205198749a48e806253af1fb9d4469d12631a3c1"
+      }
+    ]
+  },
+  {
+    "id": "F13",
+    "priority": "MEDIA",
+    "title": "Probabilidades por zona: varios contextos, sin validación OOS",
+    "evidence_type": "RIESGO METODOLÓGICO",
+    "observation": "El método ponderado mezcla 25% uniforme/75% similitud y reescala por ATR residual. Permite 12 sesiones y tamaño efectivo 8; Wilson ponderado es aproximado con dependencia entre sesiones. Un mes de 5m y filtrado previo restringen la muestra. No registra resultados por zona/toque/cierre para calibrar estos ajustes.",
+    "impact": "Más factores no prueban más precisión. Los intervalos no incluyen toda la incertidumbre de pesos/modelo.",
+    "recommendation": "Guardar pronósticos por nivel y sus resultados; comparar OOS contra frecuencia y baseline ATR, eliminar componentes para medir su aporte y remuestrear por sesión.",
+    "acceptance": "Brier/fiabilidad por toque y cierre con cobertura de intervalos y mínimos efectivos justificados; mantener etiqueta no calibrada.",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/conditional_zone_reach.py",
+        "anchor": "def _similarity(",
+        "reviewed_sha256": "996025775d1e74452276b8d52af00f2f8fc7abf2d1d58328ebfeb621e7a0ac06"
+      },
+      {
+        "path": "portfolio_tracker/analytics/conditional_zone_reach.py",
+        "anchor": "effective = float(",
+        "reviewed_sha256": "996025775d1e74452276b8d52af00f2f8fc7abf2d1d58328ebfeb621e7a0ac06"
+      },
+      {
+        "path": "portfolio_tracker/services/price_zones.py",
+        "anchor": "def build_zone_snapshot(",
+        "reviewed_sha256": "563bca5a09823766fd2dea4332455fdf144b878f16f8a0e384d3e7574916429c"
+      }
+    ]
+  },
+  {
+    "id": "F14",
+    "priority": "MEDIA",
+    "title": "Fuentes incompletas de noticias/eventos pueden aparentar neutralidad",
+    "evidence_type": "ESTÁTICO",
+    "observation": "Sentimiento por palabras clave sin tratamiento sistemático de negaciones. Calendario centrado en earnings/dividendos, no macro exhaustivo. safe_read captura fallos y devuelve valores vacíos; una descarga parcial no diferencia proveedor caído de ausencia de eventos.",
+    "impact": "Puede faltar un veto temporal o interpretarse información ausente como bajo riesgo.",
+    "recommendation": "Estados OK/STALE/UNKNOWN por fuente y trazabilidad de errores; calendario macro autorizado; evaluar sentimiento con corpus etiquetado.",
+    "acceptance": "Fuente caída no equivale a calendario sin riesgo; probar negaciones y expiración de datos.",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/fundamental_news.py",
+        "anchor": "def safe_read(",
+        "reviewed_sha256": "dc16770bd104e0f1d20ca1333844955359d9dc8737dbb58b8f4332e88efbee2a"
+      },
+      {
+        "path": "portfolio_tracker/analytics/fundamental_news.py",
+        "anchor": "def _news_items(",
+        "reviewed_sha256": "dc16770bd104e0f1d20ca1333844955359d9dc8737dbb58b8f4332e88efbee2a"
+      }
+    ]
+  },
+  {
+    "id": "F15",
+    "priority": "MEDIA",
+    "title": "Trabajo repetido de exportación y verificación creciente",
+    "evidence_type": "ESTÁTICO / MEDICIÓN SINTÉTICA",
+    "observation": "Cada actualización genera cuatro PDFs antes de terminar la vista; tres reconstruyen gráficas técnicas. La caché de descarga no evita recalcular el análisis. read_state recorre toda la cadena y se invoca nuevamente en el flujo.",
+    "impact": "Latencia y memoria innecesarias que crecen con usuarios/historial. Los tiempos anexos son sintéticos locales, no carga real.",
+    "recommendation": "PDF bajo demanda o caché por hash de snapshot, reutilización de imágenes y verificación incremental con auditoría completa periódica.",
+    "acceptance": "Igual snapshot no regenera cuatro documentos; medir p50/p95 y memoria sin omitir controles de integridad.",
+    "probe": "synthetic_performance",
+    "references": [
+      {
+        "path": "app.py",
+        "anchor": "executive_pdf = build_executive_report(",
+        "reviewed_sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af"
+      },
+      {
+        "path": "portfolio_tracker/services/operational_state.py",
+        "anchor": "def read_state(",
+        "reviewed_sha256": "74dcd31277e182b142a21f310bd160a7e8625e1cf8e9d60d76659a5974fb479f"
+      }
+    ]
+  },
+  {
+    "id": "F16",
+    "priority": "MEDIA",
+    "title": "Marcador de implementación estático y riesgo visual oculto",
+    "evidence_type": "ESTÁTICO",
+    "observation": "implementation_status fija 89 pruebas y fecha 2026-08-31; contar funciones AST no equivale a casos pytest parametrizados ejecutados. CSS oculta bloques de decisión/explicación sin garantizar un indicador compacto equivalente junto a las zonas.",
+    "impact": "100% puede confundirse con verificación vigente; ver niveles no implica autorización actual.",
+    "recommendation": "Mostrar artefacto real de pruebas con fecha y commit; mantener una única señal de veto/disponibilidad visible sin saturación.",
+    "acceptance": "El contador coincide con la versión comprobada; una zona nunca aparenta autorización bajo veto.",
+    "references": [
+      {
+        "path": "portfolio_tracker/services/implementation_status.py",
+        "anchor": "LAST_VERIFIED_TESTS = 89",
+        "reviewed_sha256": "cd2988e40ae6b63f1fc27765b4b6b9a2e6475cfa1770b800cb370edf69d1b0d3"
+      },
+      {
+        "path": "portfolio_tracker/ui/theme.py",
+        "anchor": ".st-key-quant_decision,",
+        "reviewed_sha256": "fe676b86d1504a22471fc92276bfcb8b54fc6abca5013c667ad82f19f79eadaa"
+      }
+    ]
+  },
+  {
+    "id": "F17",
+    "priority": "MEDIA",
+    "title": "Contrato de tolerancia y vigencia de patrones incompleto",
+    "evidence_type": "ESTÁTICO",
+    "observation": "Simetría permite 0,50 ATR frente al antiguo requisito de 0,5% del ATR: una interpretación 100 veces distinta que debe aclararse antes de cambiarse. La confirmación retiene un breakout de la ventana sin ciclo explícito de agotamiento/invalidación. Confianza es score geométrico.",
+    "impact": "Un patrón anterior puede seguir influyendo como activo; confianza no es frecuencia empírica de éxito.",
+    "recommendation": "Documentar unidades y estados candidato/confirmado/agotado/invalidado; calibrar antes de llamar probabilidad a la confianza.",
+    "acceptance": "Patrones vencidos/invalidos no vetan ni bonifican; pruebas de unidades y ciclo completo.",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/chart_patterns.py",
+        "anchor": "if symmetry_atr > 0.50:",
+        "reviewed_sha256": "c56f9168a4f85febd883cdf7727c853d8f8f090c30226c4eb100a5ed5050214b"
+      },
+      {
+        "path": "portfolio_tracker/analytics/chart_patterns.py",
+        "anchor": "def evaluate_pattern_influence(",
+        "reviewed_sha256": "c56f9168a4f85febd883cdf7727c853d8f8f090c30226c4eb100a5ed5050214b"
+      }
+    ]
+  },
+  {
+    "id": "F18",
+    "priority": "MEDIA",
+    "title": "Walk-forward sin purga explícita de madurez y con capital de fold ambiguo",
+    "evidence_type": "ESTÁTICO / RIESGO METODOLÓGICO",
+    "observation": "Folds por cantidad de candidatos agregan trades completos a la calibración sin recortar exit/available_at frente al inicio siguiente. Se calcula probabilidad antes de rechazar solapamientos; ese rechazo protege entradas, pero no prueba causalidad de todas las etiquetas/métricas. Los folds usan capital inicial para reportar y equity acumulada para dimensionar.",
+    "impact": "Límites temporales y denominadores pueden ser incoherentes. No se demostró inflación de retornos reales por este caso.",
+    "recommendation": "Folds temporales con purga por madurez y embargo; filtrar evidencia disponible por corte y usar equity inicial real de cada fold.",
+    "acceptance": "Ninguna etiqueta futura se usa en su corte; conciliar métricas por fold con la curva global.",
+    "references": [
+      {
+        "path": "portfolio_tracker/analytics/backtesting.py",
+        "anchor": "calibration_evidence.extend(fold_trades)",
+        "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+      },
+      {
+        "path": "portfolio_tracker/analytics/backtesting.py",
+        "anchor": "fold_metrics, _ = calculate_metrics(",
+        "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+      }
+    ]
+  }
+]

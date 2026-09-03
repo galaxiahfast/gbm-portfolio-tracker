@@ -61,6 +61,13 @@ class HorizonProjection:
     probability_status: str = "Score heurístico preliminar"
     calibration_samples: int = 0
     brier_score: float | None = None
+    calibration_training_samples: int = 0
+    calibration_fit_samples: int = 0
+    calibration_holdout_samples: int = 0
+    calibration_excluded: int = 0
+    raw_brier_score: float | None = None
+    baseline_brier_score: float | None = None
+    calibration_detail: str = "Sin evaluación OOS"
 
 
 @dataclass(frozen=True, slots=True)

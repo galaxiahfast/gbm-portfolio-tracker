@@ -2,6 +2,7 @@
 streamlit>=1.62,<2
 numpy>=1.26,<3
 pandas>=2.2,<3
+exchange-calendars>=4.5,<5
 plotly>=6.5,<7
 
 # HTTP, imágenes y OCR local

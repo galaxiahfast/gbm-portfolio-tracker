@@ -4,6 +4,7 @@ from datetime import timedelta
 
 import pandas as pd
 import pytest
+from tests.market_fixtures import intraday_index as session_index
 
 from portfolio_tracker.analytics.technical_probability import (
     CandlePattern,
@@ -56,9 +57,7 @@ def test_preliminary_probability_rewards_aligned_signal_and_volume() -> None:
 
 
 def test_analysis_builds_indicators_pivots_and_complementary_probabilities() -> None:
-    intraday_index = pd.date_range(
-        "2026-08-20 13:30", periods=180, freq="5min", tz="UTC"
-    )
+    intraday_index = session_index(180)
     intraday_prices = [
         40 + item * 0.015 + math.sin(item / 4) * 1.2
         for item in range(len(intraday_index))
@@ -109,9 +108,7 @@ def test_analysis_builds_indicators_pivots_and_complementary_probabilities() -> 
 
 
 def test_extreme_oversold_at_support_enables_long_rebound_watch() -> None:
-    intraday_index = pd.date_range(
-        "2026-08-20 13:30", periods=220, freq="5min", tz="UTC"
-    )
+    intraday_index = session_index(220)
     intraday_prices = [
         40 + item * 0.015 + math.sin(item / 4) * 1.2
         for item in range(len(intraday_index))
@@ -139,21 +136,20 @@ def test_extreme_oversold_at_support_enables_long_rebound_watch() -> None:
 
 
 def test_analysis_ignores_provisional_zero_volume_bar() -> None:
-    intraday_index = pd.date_range(
-        "2026-08-20 13:30", periods=180, freq="5min", tz="UTC"
-    )
+    intraday_index = session_index(180)
     intraday_prices = [
         40 + item * 0.015 + math.sin(item / 4) * 1.2
         for item in range(len(intraday_index))
     ]
-    daily_index = pd.date_range("2026-05-01", periods=90, freq="B")
+    daily_index = pd.date_range("2026-04-01", periods=110, freq="B")
     daily_prices = [
         32 + item * 0.12 + math.sin(item / 6) * 1.5
         for item in range(len(daily_index))
     ]
     intraday = _ohlcv(intraday_index, intraday_prices)
     daily = _ohlcv(daily_index, daily_prices)
-    baseline = analyze_probability("SMCI", intraday, daily)
+    cutoff = intraday.index[-1] + timedelta(minutes=5)
+    baseline = analyze_probability("SMCI", intraday, daily, as_of_time=cutoff)
 
     provisional_time = intraday.index[-1] + timedelta(minutes=5)
     provisional = pd.DataFrame(
@@ -167,7 +163,7 @@ def test_analysis_ignores_provisional_zero_volume_bar() -> None:
         index=pd.DatetimeIndex([provisional_time]),
     )
     with_provisional = analyze_probability(
-        "SMCI", pd.concat([intraday, provisional]), daily
+        "SMCI", pd.concat([intraday, provisional]), daily, as_of_time=cutoff
     )
 
     assert with_provisional.as_of == baseline.as_of

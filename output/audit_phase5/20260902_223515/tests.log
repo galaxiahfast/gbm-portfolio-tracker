@@ -1,0 +1,188 @@
+........................................................................ [ 30%]
+........................................................................ [ 61%]
+........................................................................ [ 91%]
+...................                                                      [100%]
+============================== warnings summary ===============================
+.venv\Lib\site-packages\exchange_calendars\exchange_calendar.py:65
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\.venv\Lib\site-packages\exchange_calendars\exchange_calendar.py:65: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    ONE_HOUR = pd.Timedelta("1h")
+
+tests/test_calibration_oos.py: 3 warnings
+tests/test_causal_replay.py: 6 warnings
+tests/test_conditional_zone_reach.py: 6 warnings
+tests/test_zone_reach.py: 3 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\.venv\Lib\site-packages\exchange_calendars\utils\pandas_utils.py:60: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    delta = pd.Timedelta(
+
+tests/test_calibration_oos.py: 54 warnings
+tests/test_live_model_integrity.py: 258 warnings
+tests/test_repository.py: 22 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\services\model_observations.py:54: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    (stamp - session.open) % pd.Timedelta(minutes=5) == pd.Timedelta(seconds=0))
+
+tests/test_calibration_oos.py: 14 warnings
+tests/test_live_model_integrity.py: 81 warnings
+tests/test_repository.py: 6 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\services\model_observations.py:43: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    return (utc_timestamp(observed_at) + pd.Timedelta(minutes=horizon_minutes)).ceil("5min")
+
+tests/test_calibration_oos.py: 4 warnings
+tests/test_live_model_integrity.py: 42 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\tests\test_live_model_integrity.py:34: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    index=pd.DatetimeIndex([pd.Timestamp(t)-pd.Timedelta(minutes=5) for t,_ in pairs]),
+
+tests/test_calibration_oos.py: 4 warnings
+tests/test_live_model_integrity.py: 40 warnings
+tests/test_repository.py: 1 warning
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\services\model_observations.py:128: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    end = utc_timestamp(start) + pd.Timedelta(minutes=5)
+
+tests/test_causal_replay.py::test_replay_and_live_equal_at_same_historical_cut_and_future_invariant
+tests/test_causal_replay.py::test_daily_bars_are_not_accepted_as_5m_replay
+tests/test_causal_replay.py::test_next_bar_execution_keeps_live_plan_and_real_session_horizon
+tests/test_causal_replay.py::test_replay_batch_uses_shared_candidates_and_preserves_contract
+tests/test_risk_data_validity.py::test_invalid_latest_indicator_never_falls_back_to_old_bar[RSI14]
+tests/test_risk_data_validity.py::test_invalid_latest_indicator_never_falls_back_to_old_bar[StochRSI_K]
+tests/test_risk_data_validity.py::test_invalid_latest_indicator_never_falls_back_to_old_bar[StochRSI_D]
+tests/test_risk_data_validity.py::test_invalid_latest_indicator_never_falls_back_to_old_bar[ADX14]
+tests/test_risk_data_validity.py::test_flat_recent_prices_veto_current_cut_even_with_valid_older_history
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\tests\test_causal_replay.py:71: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    return ReplayDataset(intraday,daily,index[-1]+pd.Timedelta(minutes=5))
+
+tests/test_causal_replay.py: 6 warnings
+tests/test_risk_data_validity.py: 5 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\replay.py:48: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    if len(source) < 300 or not (source.index.to_series().diff().dropna() == pd.Timedelta(minutes=5)).any():
+
+tests/test_causal_replay.py: 7551 warnings
+tests/test_fundamental_news.py: 1372 warnings
+tests/test_live_model_integrity.py: 686 warnings
+tests/test_operational_architecture.py: 2460 warnings
+tests/test_pdf_report.py: 4116 warnings
+tests/test_price_zones_ui.py: 2744 warnings
+tests/test_projection_chart.py: 4116 warnings
+tests/test_quant_minimal_view.py: 686 warnings
+tests/test_risk_data_validity.py: 7000 warnings
+tests/test_technical_probability.py: 2370 warnings
+tests/test_weighted_zone_reach.py: 686 warnings
+tests/test_zone_pdf.py: 3430 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\closed_bars.py:54: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    duration = pd.Timedelta(minutes={"5m": 5, "1h": 60, "4h": 240}[timeframe])
+
+tests/test_causal_replay.py::test_replay_and_live_equal_at_same_historical_cut_and_future_invariant
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\tests\test_causal_replay.py:75: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    cut = dataset.intraday.index[400]+pd.Timedelta(minutes=5)
+
+tests/test_causal_replay.py: 36 warnings
+tests/test_fundamental_news.py: 12 warnings
+tests/test_live_model_integrity.py: 6 warnings
+tests/test_operational_architecture.py: 23 warnings
+tests/test_pdf_report.py: 36 warnings
+tests/test_price_zones_ui.py: 24 warnings
+tests/test_projection_chart.py: 36 warnings
+tests/test_quant_minimal_view.py: 6 warnings
+tests/test_technical_probability.py: 24 warnings
+tests/test_weighted_zone_reach.py: 6 warnings
+tests/test_zone_pdf.py: 30 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\closed_bars.py:70: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    origin = session.index[0].normalize() + pd.Timedelta(hours=9, minutes=30)
+
+tests/test_causal_replay.py: 270 warnings
+tests/test_fundamental_news.py: 104 warnings
+tests/test_live_model_integrity.py: 52 warnings
+tests/test_operational_architecture.py: 166 warnings
+tests/test_pdf_report.py: 312 warnings
+tests/test_price_zones_ui.py: 208 warnings
+tests/test_projection_chart.py: 312 warnings
+tests/test_quant_minimal_view.py: 52 warnings
+tests/test_technical_probability.py: 174 warnings
+tests/test_weighted_zone_reach.py: 52 warnings
+tests/test_zone_pdf.py: 260 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\closed_bars.py:78: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    expected = [int((min(s + pd.Timedelta(timeframe), close) - s) / pd.Timedelta(minutes=5)) for s in bars.index]
+
+tests/test_causal_replay.py::test_replay_and_live_equal_at_same_historical_cut_and_future_invariant
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\tests\test_causal_replay.py:85: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    assert replay.intraday_indicators.index[-1]+pd.Timedelta(minutes=5) <= cut
+
+tests/test_causal_replay.py::test_next_bar_execution_keeps_live_plan_and_real_session_horizon
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\tests\test_causal_replay.py:97: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    candidate = bt.SetupCandidate(77,(frame.index[77]+pd.Timedelta(minutes=5)).isoformat(),
+
+tests/test_causal_replay.py::test_next_bar_execution_keeps_live_plan_and_real_session_horizon
+tests/test_risk_data_validity.py::test_gap_stop_fills_at_open_and_does_not_mark_post_exit_extremes[LONG-90.0]
+tests/test_risk_data_validity.py::test_gap_stop_fills_at_open_and_does_not_mark_post_exit_extremes[SHORT-110.0]
+tests/test_risk_data_validity.py::test_float_drawdown_is_visible_even_when_trade_finishes_profitable
+tests/test_risk_data_validity.py::test_simultaneous_positions_are_aggregated_before_drawdown
+tests/test_risk_data_validity.py::test_legacy_trade_without_marks_is_still_supported
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\backtesting.py:519: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    (pd.Timedelta(minutes=5) if candidate.plan_stop is not None else pd.Timedelta(0))).isoformat(),
+
+tests/test_causal_replay.py::test_next_bar_execution_keeps_live_plan_and_real_session_horizon
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\tests\test_causal_replay.py:103: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    assert pd.Timestamp(trade.exit_date)==frame.index[155]+pd.Timedelta(minutes=5)
+
+tests/test_conditional_zone_reach.py: 384 warnings
+tests/test_weighted_zone_reach.py: 192 warnings
+tests/test_zone_reach.py: 512 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\tests\test_zone_reach.py:11: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    for t in pd.date_range(s['open'], s['close'] - pd.Timedelta(minutes=5), freq='5min')])
+
+tests/test_conditional_zone_reach.py: 7 warnings
+tests/test_weighted_zone_reach.py: 5 warnings
+tests/test_zone_pdf.py: 4 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\conditional_zone_reach.py:113: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    step = pd.Timedelta(minutes=5)
+
+tests/test_conditional_zone_reach.py: 8 warnings
+tests/test_weighted_zone_reach.py: 5 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\.venv\Lib\site-packages\pandas\core\resample.py:2359: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    + Timedelta(days=1, unit=edges_dti.unit).as_unit(edges_dti.unit)
+
+tests/test_conditional_zone_reach.py: 979 warnings
+tests/test_weighted_zone_reach.py: 697 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\conditional_zone_reach.py:41: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    week_bias.index = pd.DatetimeIndex([calendar.loc[end-pd.Timedelta(days=6):end].index[-1]
+
+tests/test_live_model_integrity.py::test_analysis_cut_keeps_open_label_and_exposes_known_close
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\technical_probability.py:249: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    return (utc_timestamp(self.as_of) + pd.Timedelta(minutes=5)).to_pydatetime()
+
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\technical_validity.py:59: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    if not schedule.empty and schedule.iloc[-1]['open'] <= now < schedule.iloc[-1]['open']+pd.Timedelta(minutes=5):
+
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\technical_validity.py:63: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    if now >= session.open + pd.Timedelta(minutes=5):
+
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\technical_validity.py:65: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    steps = int((end-session.open)/pd.Timedelta(minutes=5))
+
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\technical_validity.py:66: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    expected = session.open+steps*pd.Timedelta(minutes=5)
+
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+tests/test_risk_data_validity.py::test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\technical_validity.py:70: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    observed = stamp.tz_convert('UTC')+pd.Timedelta(minutes=5)
+
+tests/test_zone_reach.py: 13 warnings
+  C:\Users\MOISES INFORMATICA\Desktop\STOCK\portfolio_tracker\analytics\zone_reach.py:61: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`).Please use a specific unit instead.
+    step = pd.Timedelta(minutes=5)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+235 passed, 42816 warnings in 52.59s
+

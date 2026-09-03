@@ -22,9 +22,12 @@ from portfolio_tracker.analytics.multi_timeframe import (
     resample_ohlcv,
 )
 from portfolio_tracker.analytics.technical_probability import add_intraday_indicators
+from portfolio_tracker.analytics.causal_core import directional_confluence, causal_revision
+from portfolio_tracker.analytics.replay import ReplayDataset, prepare_replay, REPLAY_CONTRACT
 
 
-ENGINE_VERSION = "walk-forward-phase5-v1"
+ENGINE_VERSION = "causal-replay-phase5-v2"
+DAILY_RESEARCH_VERSION = "daily-research-symmetric-v2"
 REQUIRED_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 
 
@@ -49,6 +52,15 @@ class BacktestConfig:
     signal_batch_size: int = 1_000
 
     def __post_init__(self) -> None:
+        if not all(isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v)
+                   for v in asdict(self).values()):
+            raise ValueError('Los parámetros de backtest deben ser números finitos.')
+        if not 0 < self.risk_per_trade_pct <= 100 or not 0 < self.max_position_exposure_pct <= 100:
+            raise ValueError('Riesgo/exposición fuera de (0,100].')
+        if self.commission_bps_per_side < 0 or self.slippage_bps_per_side < 0:
+            raise ValueError('Los costes no pueden ser negativos.')
+        if self.minimum_validation_trades < 1 or self.minimum_reward_risk < 1.5:
+            raise ValueError('Mínimos de validación/riesgo inválidos.')
         if not 0.55 <= self.training_fraction <= 0.85:
             raise ValueError("El tramo de entrenamiento debe estar entre 55% y 85%.")
         if not 2.0 <= self.stop_atr_multiple <= 2.5:
@@ -83,6 +95,8 @@ class SetupCandidate:
     exposure_factor: float
     trigger: str
     market_regime: str
+    plan_stop: float | None = None
+    plan_target: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +122,10 @@ class SimulatedTrade:
     outcome: str
     exit_reason: str
     market_regime: str
+    # (bar timestamp, phase 0=open/1=favourable/2=adverse/3=close/4=legacy exit,
+    #  net liquidation P&L). Last mark closes the position, regardless of phase.
+    mark_to_market: tuple[tuple[str, int, float], ...] = ()
+    maximum_adverse_excursion_usd: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +182,7 @@ class SymbolBacktestResult:
     walk_forward_folds: tuple[WalkForwardFold, ...] = ()
     regime_metrics: tuple[tuple[str, PerformanceMetrics], ...] = ()
     benchmarks: BenchmarkMetrics | None = None
+    replay_contract: str = "daily-research-only"
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +195,8 @@ class BacktestBatchResult:
     aggregate: PerformanceMetrics
     aggregate_decision: str
     dataset_sha256: str
+    replay_contract: str = "daily-research-only"
+    core_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,7 +337,6 @@ def _generate_candidates(
                 continue
             exposure_factor = 0.50
 
-        direction = 1.0 if side == "LONG" else -1.0
         ema_aligned = (
             float(row["EMA9"]) > float(row["EMA21"])
             if side == "LONG"
@@ -336,14 +356,12 @@ def _generate_candidates(
             # y MACD, la señal queda en transición y opera a media exposición.
             exposure_factor = min(exposure_factor, 0.50)
 
-        score = 3.0 * direction
-        score += direction if float(row["MACD"]) > float(row["MACD_signal"]) else -direction
-        score += direction if float(row["Close"]) > float(row["EMA21"]) else -direction
-        score += 0.75 * float(row["WeeklyBias"])
-        score += 1.00 * monthly_bias
-        score += 0.5 * direction if volume_ratio > 1.20 else 0.0
-        # Penalización simétrica: una señal nunca recibe sesgo alcista por defecto.
-        directional_score = score * direction
+        directional_score = directional_confluence(
+            side, macd_delta=float(row['MACD']-row['MACD_signal']),
+            price_delta=float(row['Close']-row['EMA21']),
+            weekly_bias=float(row['WeeklyBias']), monthly_bias=monthly_bias,
+            volume_ratio=volume_ratio,
+        )
         if directional_score < 2.0:
             rejected["Confluencia direccional insuficiente"] += 1
             continue
@@ -406,7 +424,10 @@ def _simulate_trade(
     entry = float(entry_row["Open"])
     atr = max(candidate.atr, entry * 0.001)
     signal_row = indicators.iloc[signal_position]
-    if candidate.side == "LONG":
+    if candidate.plan_stop is not None:
+        stop, target = candidate.plan_stop, candidate.plan_target
+        risk_per_share = abs(entry-stop)
+    elif candidate.side == "LONG":
         atr_stop = entry - config.stop_atr_multiple * atr
         support = float(signal_row["PriorLow20"])
         structural_stop = support - 0.10 * atr
@@ -426,6 +447,13 @@ def _simulate_trade(
         equity * config.max_position_exposure_pct / 100 * candidate.exposure_factor
     ) / max(entry, 0.01)
     quantity = max(0.0, min(quantity_by_risk, quantity_by_exposure))
+    direction = 1.0 if candidate.side == 'LONG' else -1.0
+    cost_rate = (config.commission_bps_per_side + config.slippage_bps_per_side)/10_000
+    marks = []
+
+    def mark(position, phase, price):
+        pnl = quantity*(price-entry)*direction - quantity*(entry+price)*cost_rate
+        marks.append((pd.Timestamp(indicators.index[position]).isoformat(),phase,round(pnl,6)))
 
     exit_price = float(indicators.iloc[entry_position]["Close"])
     exit_position = entry_position
@@ -433,16 +461,31 @@ def _simulate_trade(
     last_position = min(
         len(indicators) - 1, entry_position + config.holding_sessions - 1
     )
+    if candidate.plan_stop is not None:
+        days = indicators.index.tz_convert('America/New_York').normalize()
+        sessions = days[entry_position:].unique()
+        final_day = sessions[min(config.holding_sessions,len(sessions))-1]
+        last_position = int((days <= final_day).sum())-1
     for position in range(entry_position, last_position + 1):
         row = indicators.iloc[position]
         low, high = float(row["Low"]), float(row["High"])
+        opening = float(row['Open'])
+        # Known opening gaps precede unknown intrabar extremes. Never invent
+        # a fill at a stop skipped by the opening auction.
+        if (candidate.side == 'LONG' and opening <= stop) or (candidate.side == 'SHORT' and opening >= stop):
+            exit_price, exit_position, exit_reason = opening, position, 'Stop por gap de apertura'
+            break
+        if (candidate.side == 'LONG' and opening >= target) or (candidate.side == 'SHORT' and opening <= target):
+            exit_price, exit_position, exit_reason = target, position, 'Take profit en apertura (conservador)'
+            break
+        mark(position,0,opening)
         # Si ambos niveles aparecen en la misma vela diaria, se asume el stop:
         # criterio conservador que evita inventar el orden intradía favorable.
         if candidate.side == "LONG" and low <= stop:
-            exit_price, exit_position, exit_reason = stop, position, "Stop ATR/estructural"
+            exit_price, exit_position, exit_reason = min(stop,float(row['Open'])), position, "Stop ATR/estructural"
             break
         if candidate.side == "SHORT" and high >= stop:
-            exit_price, exit_position, exit_reason = stop, position, "Stop ATR/estructural"
+            exit_price, exit_position, exit_reason = max(stop,float(row['Open'])), position, "Stop ATR/estructural"
             break
         if candidate.side == "LONG" and high >= target:
             exit_price, exit_position, exit_reason = target, position, "Take profit"
@@ -450,6 +493,11 @@ def _simulate_trade(
         if candidate.side == "SHORT" and low <= target:
             exit_price, exit_position, exit_reason = target, position, "Take profit"
             break
+        # Without intrabar ticks, favourable -> adverse is a conservative
+        # drawdown envelope, not an asserted observed tick ordering.
+        mark(position,1,high if candidate.side=='LONG' else low)
+        mark(position,2,low if candidate.side=='LONG' else high)
+        mark(position,3,float(row['Close']))
         exit_price = float(row["Close"])
         exit_position = position
 
@@ -458,13 +506,17 @@ def _simulate_trade(
     round_trip_bps = config.commission_bps_per_side + config.slippage_bps_per_side
     costs = quantity * (entry + exit_price) * round_trip_bps / 10_000
     net_pnl = gross_pnl - costs
+    final_phase = (0 if 'apertura' in exit_reason else 2 if exit_reason.startswith('Stop')
+                   else 1 if exit_reason == 'Take profit' else 3)
+    mark(exit_position,final_phase,exit_price)
     net_r = net_pnl / risk_budget if risk_budget > 0 else 0.0
     return SimulatedTrade(
         symbol=symbol,
         split=split,
         signal_date=candidate.signal_date,
         entry_date=pd.Timestamp(indicators.index[entry_position]).isoformat(),
-        exit_date=pd.Timestamp(indicators.index[exit_position]).isoformat(),
+        exit_date=(pd.Timestamp(indicators.index[exit_position]) +
+                   (pd.Timedelta(minutes=5) if candidate.plan_stop is not None else pd.Timedelta(0))).isoformat(),
         side=candidate.side,
         entry_price=round(entry, 6),
         stop_price=round(stop, 6),
@@ -481,6 +533,8 @@ def _simulate_trade(
         outcome="WIN" if net_pnl > 0 else "LOSS",
         exit_reason=exit_reason,
         market_regime=candidate.market_regime,
+        mark_to_market=tuple(marks),
+        maximum_adverse_excursion_usd=max(0.0,-min(m[2] for m in marks)),
     )
 
 
@@ -508,12 +562,28 @@ def calculate_metrics(
     peak = equity
     maximum_drawdown = 0.0
     curve: list[tuple[str, float]] = []
-    for trade in ordered:
-        equity += trade.net_pnl_usd
+    # Merge simultaneous marks across symbols before measuring equity. Carry
+    # each open position's last valuation; transfer to realized only at exit.
+    events = {}
+    for identifier, trade in enumerate(ordered):
+        marks = trade.mark_to_market or ((trade.exit_date,4,trade.net_pnl_usd),)
+        for position,(date,phase,pnl) in enumerate(marks):
+            stamp = pd.Timestamp(date)
+            stamp = stamp.tz_localize('UTC') if stamp.tzinfo is None else stamp.tz_convert('UTC')
+            events.setdefault((stamp,phase),[]).append((identifier,pnl,position==len(marks)-1))
+    realized, active = 0.0, {}
+    for (stamp,phase), updates in sorted(events.items()):
+        for identifier,pnl,closed in updates:
+            if closed:
+                realized += pnl
+                active.pop(identifier,None)
+            else:
+                active[identifier] = pnl
+        equity = starting_capital + realized + sum(active.values())
         peak = max(peak, equity)
         drawdown = (peak - equity) / peak * 100 if peak > 0 else 0.0
         maximum_drawdown = max(maximum_drawdown, drawdown)
-        curve.append((trade.exit_date, round(equity, 6)))
+        curve.append((stamp.isoformat(), round(equity, 6)))
     wins = sum(trade.net_pnl_usd > 0 for trade in ordered)
     losses = len(ordered) - wins
     gross_profit = sum(max(0.0, trade.net_pnl_usd) for trade in ordered)
@@ -574,7 +644,7 @@ def evaluate_capital_preservation(
         reasons.append(
             f"Solo hay {metrics.trades} operaciones OOS; se requieren {config.minimum_validation_trades}."
         )
-    break_even_probability = 1 / (1 + config.reward_risk)
+    break_even_probability = 1 / (1 + config.minimum_reward_risk)
     if metrics.win_rate_lower_bound <= break_even_probability:
         reasons.append(
             "El límite inferior de acierto no supera la probabilidad de equilibrio."
@@ -649,12 +719,33 @@ def run_symbol_backtest(
     *,
     starting_capital_usd: float,
 ) -> SymbolBacktestResult:
-    indicators = _prepare_indicators(frame)
-    candidates, hard_rejections = _generate_candidates(indicators, config)
+    replay = isinstance(frame, ReplayDataset)
+    holding_bars = config.holding_sessions
+    if replay:
+        indicators, all_candidates, cached_rejections = prepare_replay(frame, config, symbol=symbol)
+        hard_rejections = cached_rejections.copy()
+        # Convert session horizon to bars conservatively (78 regular 5m bars).
+        # Early-close sessions therefore lengthen, never shorten, the embargo.
+        holding_bars = 78*config.holding_sessions
+        candidates = []
+        for candidate in all_candidates:
+            if candidate.signal_position+holding_bars >= len(indicators):
+                continue
+            entry = float(indicators.Open.iloc[candidate.signal_position+1])
+            stop, target = candidate.plan_stop, candidate.plan_target
+            valid = stop < entry < target if candidate.side=='LONG' else target < entry < stop
+            rr = abs(target-entry)/max(abs(entry-stop),1e-12)
+            if not valid or rr < config.minimum_reward_risk or min(stop,target) <= 0:
+                hard_rejections['Gap de apertura: plan invalidado o R:R insuficiente'] += 1
+                continue
+            candidates.append(candidate)
+    else:
+        indicators = _prepare_indicators(frame)
+        candidates, hard_rejections = _generate_candidates(indicators, config)
     split_position = max(1, min(len(indicators) - 2, int(len(indicators) * config.training_fraction)))
     split_date = pd.Timestamp(indicators.index[split_position]).isoformat()
     # Ninguna operación de entrenamiento puede consumir precios del tramo OOS.
-    training_limit = split_position - config.holding_sessions
+    training_limit = split_position - holding_bars
     training_candidates = [
         candidate for candidate in candidates
         if candidate.signal_position < training_limit
@@ -687,7 +778,10 @@ def run_symbol_backtest(
         range(0, len(validation_candidates), fold_size), start=1
     ):
         fold_candidates = validation_candidates[start : start + fold_size]
-        calibration, fallback_probability = _calibration_table(calibration_evidence)
+        # Fold membership alone is insufficient: a previous trade may still
+        # be open when the next fold begins. Its outcome cannot enter the fit.
+        known_evidence = [t for t in calibration_evidence if t.exit_date < fold_candidates[0].signal_date]
+        calibration, fallback_probability = _calibration_table(known_evidence)
         fold_trades: list[SimulatedTrade] = []
         fold_rejections = 0
         for candidate in (
@@ -700,7 +794,11 @@ def run_symbol_backtest(
             probability = calibration.get(
                 (candidate.side, candidate.strength_bucket), fallback_probability
             )
-            expected_r = probability * config.reward_risk - (1 - probability)
+            effective_rr = config.reward_risk
+            if candidate.plan_stop is not None:
+                entry = float(indicators.Open.iloc[candidate.signal_position+1])
+                effective_rr = abs(candidate.plan_target-entry)/abs(entry-candidate.plan_stop)
+            expected_r = probability * effective_rr - (1 - probability)
             if probability < config.minimum_probability:
                 hard_rejections["Probabilidad calibrada menor al mínimo"] += 1
                 statistical_rejections += 1
@@ -735,7 +833,7 @@ def run_symbol_backtest(
                 fold=fold_number,
                 start_date=fold_candidates[0].signal_date,
                 end_date=fold_candidates[-1].signal_date,
-                calibration_samples=len(calibration_evidence),
+                calibration_samples=len(known_evidence),
                 metrics=fold_metrics,
             )
         )
@@ -755,7 +853,10 @@ def run_symbol_backtest(
         starting_capital=starting_capital_usd,
     )
     decision, reasons = evaluate_capital_preservation(validation_metrics, config)
-    normalized = _normalize_frame(frame)
+    normalized = frame.intraday if replay else _normalize_frame(frame)
+    if not replay:
+        decision = 'RECHAZADO'
+        reasons = (*reasons, 'Investigación diaria: no valida reglas intradía 5m/1h/4h ni puede promover parámetros.')
     regime_metrics = tuple(
         (
             regime,
@@ -781,7 +882,7 @@ def run_symbol_backtest(
         data_start=pd.Timestamp(normalized.index[0]).isoformat(),
         data_end=pd.Timestamp(normalized.index[-1]).isoformat(),
         split_date=split_date,
-        dataset_sha256=dataset_sha256(symbol, normalized),
+        dataset_sha256=frame.fingerprint(symbol) if replay else dataset_sha256(symbol, normalized),
         training=training_metrics,
         validation=validation_metrics,
         decision=decision,
@@ -793,6 +894,7 @@ def run_symbol_backtest(
         walk_forward_folds=tuple(walk_forward),
         regime_metrics=regime_metrics,
         benchmarks=benchmarks,
+        replay_contract=REPLAY_CONTRACT if replay else 'daily-research-only',
     )
 
 
@@ -827,14 +929,16 @@ def run_backtest_batch(
         digest.update(result.symbol.encode("utf-8"))
         digest.update(result.dataset_sha256.encode("ascii"))
     return BacktestBatchResult(
-        engine_version=ENGINE_VERSION,
+        engine_version=ENGINE_VERSION if all(isinstance(f,ReplayDataset) for f in frames.values()) else DAILY_RESEARCH_VERSION,
         generated_at=datetime.now(timezone.utc).isoformat(),
         starting_capital_usd=starting_capital_usd,
         config=config,
         results=results,
         aggregate=aggregate,
-        aggregate_decision=aggregate_decision,
+        aggregate_decision=aggregate_decision if all(r.replay_contract==REPLAY_CONTRACT for r in results) else 'RECHAZADO',
         dataset_sha256=digest.hexdigest(),
+        replay_contract=REPLAY_CONTRACT if all(r.replay_contract==REPLAY_CONTRACT for r in results) else 'daily-research-only',
+        core_sha256=causal_revision(),
     )
 
 
@@ -858,6 +962,9 @@ def optimize_backtest_parameters(
         raise ValueError("La rejilla de optimización no puede estar vacía.")
     inner_frames: dict[str, pd.DataFrame] = {}
     for symbol, frame in frames.items():
+        if isinstance(frame, ReplayDataset):
+            inner_frames[symbol] = frame.training_prefix(base_config.training_fraction)
+            continue
         normalized = _normalize_frame(frame)
         outer_cut = int(len(normalized) * base_config.training_fraction)
         training_only = normalized.iloc[:outer_cut].copy()

@@ -1,0 +1,1383 @@
+{
+  "generated_at": "2026-09-02T18:47:19.048429+00:00",
+  "inventory": [
+    {
+      "path": "app.py",
+      "sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af",
+      "lines": 2873,
+      "nonblank": 2684,
+      "functions": 47,
+      "test_functions": 0,
+      "max_function_lines": 697,
+      "branches_approx": 225,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "docs/operational_architecture.md",
+      "sha256": "3d86b8d4b733fc3bf757c00da18ff286a679d5b0ce9d1d327f04dfe0bf777b1e",
+      "lines": 63,
+      "nonblank": 51
+    },
+    {
+      "path": "docs/zone_reach.md",
+      "sha256": "b4eb8f689356fdc3b763a66224acf70678751799517ca2e5bbf7d381c3134763",
+      "lines": 95,
+      "nonblank": 77
+    },
+    {
+      "path": "iniciar_app.bat",
+      "sha256": "eb5c8b04f533e33bf11e367a40a976906135b320e6b69c204744e2871a3ae7eb",
+      "lines": 36,
+      "nonblank": 30
+    },
+    {
+      "path": "portfolio_tracker/__init__.py",
+      "sha256": "ef041a3353cea389d1ec4cd2610ae57f2c60d28a66fabbfd5d1c11f4d8018f8d",
+      "lines": 4,
+      "nonblank": 2,
+      "functions": 0,
+      "test_functions": 0,
+      "max_function_lines": 0,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/__init__.py",
+      "sha256": "da4fa42729cf8877b2727d541d1d220cf3774e78845f15bc77ac15f6880051d5",
+      "lines": 22,
+      "nonblank": 20,
+      "functions": 0,
+      "test_functions": 0,
+      "max_function_lines": 0,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/backtesting.py",
+      "sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb",
+      "lines": 962,
+      "nonblank": 886,
+      "functions": 18,
+      "test_functions": 0,
+      "max_function_lines": 152,
+      "branches_approx": 96,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/base.py",
+      "sha256": "74350a8284d80ed96702c2ea24dd2b928cd4f64a513fe442b132dae4afd74d44",
+      "lines": 48,
+      "nonblank": 34,
+      "functions": 2,
+      "test_functions": 0,
+      "max_function_lines": 5,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/chart_patterns.py",
+      "sha256": "c56f9168a4f85febd883cdf7727c853d8f8f090c30226c4eb100a5ed5050214b",
+      "lines": 678,
+      "nonblank": 613,
+      "functions": 18,
+      "test_functions": 0,
+      "max_function_lines": 92,
+      "branches_approx": 80,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/closed_bars.py",
+      "sha256": "beec562563fc7ad3e001986ce68b481a6e931804d6f83ea310dc250cc222fa13",
+      "lines": 81,
+      "nonblank": 69,
+      "functions": 4,
+      "test_functions": 0,
+      "max_function_lines": 34,
+      "branches_approx": 16,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/conditional_zone_reach.py",
+      "sha256": "996025775d1e74452276b8d52af00f2f8fc7abf2d1d58328ebfeb621e7a0ac06",
+      "lines": 212,
+      "nonblank": 197,
+      "functions": 8,
+      "test_functions": 0,
+      "max_function_lines": 132,
+      "branches_approx": 30,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/decision_engines.py",
+      "sha256": "22580d39ca085ec87779e76fe9c5b97bdf1613adb451da004ea2daf8356b9109",
+      "lines": 117,
+      "nonblank": 96,
+      "functions": 6,
+      "test_functions": 0,
+      "max_function_lines": 19,
+      "branches_approx": 18,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/fundamental_news.py",
+      "sha256": "dc16770bd104e0f1d20ca1333844955359d9dc8737dbb58b8f4332e88efbee2a",
+      "lines": 632,
+      "nonblank": 588,
+      "functions": 13,
+      "test_functions": 0,
+      "max_function_lines": 212,
+      "branches_approx": 97,
+      "broad_except": 1,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/multi_timeframe.py",
+      "sha256": "d46880ae9184a256e52ef7f1205198749a48e806253af1fb9d4469d12631a3c1",
+      "lines": 763,
+      "nonblank": 693,
+      "functions": 14,
+      "test_functions": 0,
+      "max_function_lines": 187,
+      "branches_approx": 74,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/probability_calibration.py",
+      "sha256": "08cbe37605006b27315d45e0e940e568883c60c631f3df54fa18f09cb36c6c3c",
+      "lines": 149,
+      "nonblank": 128,
+      "functions": 5,
+      "test_functions": 0,
+      "max_function_lines": 41,
+      "branches_approx": 9,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/risk.py",
+      "sha256": "c8c06b9b26827c81239fa1b8243380d2343f907a70578ecf235bd272691e4abb",
+      "lines": 26,
+      "nonblank": 19,
+      "functions": 1,
+      "test_functions": 0,
+      "max_function_lines": 16,
+      "branches_approx": 3,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/technical_probability.py",
+      "sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df",
+      "lines": 1264,
+      "nonblank": 1175,
+      "functions": 26,
+      "test_functions": 0,
+      "max_function_lines": 413,
+      "branches_approx": 168,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/analytics/zone_reach.py",
+      "sha256": "b9e4250e7ec3e50403ed22a9ab727364760810101f76c62c7b1d2947bba82ae1",
+      "lines": 112,
+      "nonblank": 104,
+      "functions": 2,
+      "test_functions": 0,
+      "max_function_lines": 81,
+      "branches_approx": 18,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/config.py",
+      "sha256": "ba0105697900eaabf97d694520a44f7d6d0a93436dda6a51f23587c436bb1840",
+      "lines": 30,
+      "nonblank": 21,
+      "functions": 1,
+      "test_functions": 0,
+      "max_function_lines": 5,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/db.py",
+      "sha256": "0db83bd0392f6707546beb9ebb6451bc4fce8a7d3810d6cf453d6a9d51fd235d",
+      "lines": 525,
+      "nonblank": 477,
+      "functions": 15,
+      "test_functions": 0,
+      "max_function_lines": 90,
+      "branches_approx": 17,
+      "broad_except": 2,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/models.py",
+      "sha256": "d32130cb5c528e2197e998edb6d452d5f2af52b5ef9f900524eeed02dcab99f9",
+      "lines": 166,
+      "nonblank": 127,
+      "functions": 9,
+      "test_functions": 0,
+      "max_function_lines": 9,
+      "branches_approx": 5,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/repository.py",
+      "sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd",
+      "lines": 841,
+      "nonblank": 793,
+      "functions": 36,
+      "test_functions": 0,
+      "max_function_lines": 62,
+      "branches_approx": 48,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/__init__.py",
+      "sha256": "fd5d9eff941ac313e18245b2adef16c965283c2e83798d103ec5bbb4f67e6f74",
+      "lines": 2,
+      "nonblank": 1,
+      "functions": 0,
+      "test_functions": 0,
+      "max_function_lines": 0,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/audit.py",
+      "sha256": "a01340b2227d49b39c25f9cb8cb7b4348f0579c7ec98ebde783a5470771a70b7",
+      "lines": 465,
+      "nonblank": 430,
+      "functions": 18,
+      "test_functions": 0,
+      "max_function_lines": 95,
+      "branches_approx": 44,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/implementation_status.py",
+      "sha256": "cd2988e40ae6b63f1fc27765b4b6b9a2e6475cfa1770b800cb370edf69d1b0d3",
+      "lines": 95,
+      "nonblank": 79,
+      "functions": 2,
+      "test_functions": 0,
+      "max_function_lines": 33,
+      "branches_approx": 6,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/market_data.py",
+      "sha256": "56c81b8e7b79b54ec0b1006d74d6143104e74105ee9ef1d38fc2c7111ec296c6",
+      "lines": 140,
+      "nonblank": 112,
+      "functions": 11,
+      "test_functions": 0,
+      "max_function_lines": 18,
+      "branches_approx": 9,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/ocr.py",
+      "sha256": "0d075dea1a5e53162b83374c9cd1d0502f78d92142ae77aa50f040b28a1514cd",
+      "lines": 382,
+      "nonblank": 333,
+      "functions": 17,
+      "test_functions": 0,
+      "max_function_lines": 98,
+      "branches_approx": 35,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/operational_state.py",
+      "sha256": "74dcd31277e182b142a21f310bd160a7e8625e1cf8e9d60d76659a5974fb479f",
+      "lines": 117,
+      "nonblank": 104,
+      "functions": 5,
+      "test_functions": 0,
+      "max_function_lines": 74,
+      "branches_approx": 28,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/pdf_report.py",
+      "sha256": "0bf89683abafe9ec51289521a948e4df1c890783d525116e03177ae2dd58e88a",
+      "lines": 828,
+      "nonblank": 767,
+      "functions": 18,
+      "test_functions": 0,
+      "max_function_lines": 162,
+      "branches_approx": 78,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/pdf_technical_charts.py",
+      "sha256": "cd5ea2ac7950af59d2fe2eb9ca20c390b2ac739b91a77e665bc149e80bbc008a",
+      "lines": 400,
+      "nonblank": 373,
+      "functions": 7,
+      "test_functions": 0,
+      "max_function_lines": 243,
+      "branches_approx": 25,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/portfolio.py",
+      "sha256": "85e1c257055140a60ef8adab167fe3adc9e3de580a5d870436873be7cb817fca",
+      "lines": 147,
+      "nonblank": 130,
+      "functions": 2,
+      "test_functions": 0,
+      "max_function_lines": 111,
+      "branches_approx": 13,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/price_zones.py",
+      "sha256": "563bca5a09823766fd2dea4332455fdf144b878f16f8a0e384d3e7574916429c",
+      "lines": 135,
+      "nonblank": 115,
+      "functions": 6,
+      "test_functions": 0,
+      "max_function_lines": 50,
+      "branches_approx": 26,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/projection_chart.py",
+      "sha256": "d0bf43bc611f890a05931e820358be93d905271e0dcc1f50855b34b1cfc2fe9a",
+      "lines": 318,
+      "nonblank": 285,
+      "functions": 7,
+      "test_functions": 0,
+      "max_function_lines": 146,
+      "branches_approx": 23,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/quant_market_data.py",
+      "sha256": "5eb2703d2127ccde7ad451569d435d613c82917340036d62682d26038ae7a0c5",
+      "lines": 129,
+      "nonblank": 107,
+      "functions": 4,
+      "test_functions": 0,
+      "max_function_lines": 41,
+      "branches_approx": 12,
+      "broad_except": 2,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/receipt_storage.py",
+      "sha256": "6ebfbcd7d2cb2314a340db40d53e0984aab36daf6d15e737d07e6f3a180b96d7",
+      "lines": 84,
+      "nonblank": 69,
+      "functions": 2,
+      "test_functions": 0,
+      "max_function_lines": 46,
+      "branches_approx": 8,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/services/validation.py",
+      "sha256": "4731afaec3aa39f8385e0b9c5661fcc3b789bff6fc958a922199786ae0706133",
+      "lines": 86,
+      "nonblank": 75,
+      "functions": 1,
+      "test_functions": 0,
+      "max_function_lines": 73,
+      "branches_approx": 14,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/ui/__init__.py",
+      "sha256": "396183fb66924ef271f60b995bb2e2ba713421b95db4968235d51ef715f8ea07",
+      "lines": 6,
+      "nonblank": 4,
+      "functions": 0,
+      "test_functions": 0,
+      "max_function_lines": 0,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/ui/charts.py",
+      "sha256": "7e7afd932685123a16c40d7cd4a8ed39ec072dd02ead4e3f7e121b119c219f65",
+      "lines": 194,
+      "nonblank": 175,
+      "functions": 3,
+      "test_functions": 0,
+      "max_function_lines": 115,
+      "branches_approx": 13,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/ui/price_zones.py",
+      "sha256": "ec22d5b4821d87afdcaee8ae203d8e0b4439d8042a4783f433ab8aa0cf216cd2",
+      "lines": 67,
+      "nonblank": 63,
+      "functions": 2,
+      "test_functions": 0,
+      "max_function_lines": 29,
+      "branches_approx": 17,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "portfolio_tracker/ui/theme.py",
+      "sha256": "fe676b86d1504a22471fc92276bfcb8b54fc6abca5013c667ad82f19f79eadaa",
+      "lines": 693,
+      "nonblank": 599,
+      "functions": 1,
+      "test_functions": 0,
+      "max_function_lines": 4,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "ab72812216311988722485f516f566ac18453a697e827f5b67a381ad49e7968f",
+      "lines": 20,
+      "nonblank": 18
+    },
+    {
+      "path": "scripts/audit_phase5.py",
+      "sha256": "2f3b8c24e51c84f121e0bb41978dbdc0e863c0f871031d5bba3c231042f24227",
+      "lines": 315,
+      "nonblank": 296,
+      "functions": 15,
+      "test_functions": 0,
+      "max_function_lines": 98,
+      "branches_approx": 29,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "scripts/github_backup.py",
+      "sha256": "1707cbeb56554e2492f150c8e85670e3c81bf1c281b064fc868bb2296250929d",
+      "lines": 159,
+      "nonblank": 135,
+      "functions": 8,
+      "test_functions": 0,
+      "max_function_lines": 31,
+      "branches_approx": 12,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/market_fixtures.py",
+      "sha256": "13621cc896b95a925469c91ff02145f5b29ef8b13abdc4eda254c996f916b5db",
+      "lines": 11,
+      "nonblank": 9,
+      "functions": 1,
+      "test_functions": 0,
+      "max_function_lines": 7,
+      "branches_approx": 1,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_audit.py",
+      "sha256": "e1cfa3ad7fb69737de35a5d6b444fe0e890ad498321568668d6ed11adb8f9832",
+      "lines": 48,
+      "nonblank": 43,
+      "functions": 1,
+      "test_functions": 1,
+      "max_function_lines": 38,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_backtesting.py",
+      "sha256": "096e8fb35f346dca8f60aa1c45e729282e16783af81c7c59efa02adb56a76baf",
+      "lines": 176,
+      "nonblank": 150,
+      "functions": 8,
+      "test_functions": 7,
+      "max_function_lines": 23,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_chart_patterns.py",
+      "sha256": "a49e1836ba786e4a44883944f2344a47eddedbdb20062f66b296db89e615db76",
+      "lines": 226,
+      "nonblank": 189,
+      "functions": 12,
+      "test_functions": 8,
+      "max_function_lines": 25,
+      "branches_approx": 3,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_conditional_zone_reach.py",
+      "sha256": "e7da0df604c0c30a3487920ec7d6cf2c3df02d25d2cb0b37d9606a21a1a48f30",
+      "lines": 81,
+      "nonblank": 63,
+      "functions": 9,
+      "test_functions": 8,
+      "max_function_lines": 9,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_fundamental_news.py",
+      "sha256": "2e211c72bd39bf9141dcf032a373025bcc2a1ddab3cebadc5add5c66a033768d",
+      "lines": 173,
+      "nonblank": 149,
+      "functions": 7,
+      "test_functions": 5,
+      "max_function_lines": 28,
+      "branches_approx": 1,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_github_backup.py",
+      "sha256": "df53c91253f2eeb137abed688c571d8765f95a27a6d2c9d4487b20f1bb0e58d7",
+      "lines": 40,
+      "nonblank": 34,
+      "functions": 2,
+      "test_functions": 2,
+      "max_function_lines": 20,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_implementation_status.py",
+      "sha256": "badd8decdaf93d5967f26717092249766cadb7fb23f3ca68d4c2fb82c6d66717",
+      "lines": 20,
+      "nonblank": 17,
+      "functions": 1,
+      "test_functions": 1,
+      "max_function_lines": 16,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_multi_timeframe.py",
+      "sha256": "ffee87fb6075bb4e2a5bb8ba3d96b95744583e3ed4a27c7a1915efe82646dcd0",
+      "lines": 313,
+      "nonblank": 262,
+      "functions": 16,
+      "test_functions": 15,
+      "max_function_lines": 37,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_ocr_parser.py",
+      "sha256": "034015f3c864446acd50bd0c5eec68e418028f0370ac2c51d10c999fc32cd573",
+      "lines": 107,
+      "nonblank": 90,
+      "functions": 6,
+      "test_functions": 5,
+      "max_function_lines": 20,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_operational_architecture.py",
+      "sha256": "7cf30c6cf998d6614d10ee7674e1331204afb7a61de32713cba79caa774f28d4",
+      "lines": 170,
+      "nonblank": 140,
+      "functions": 14,
+      "test_functions": 10,
+      "max_function_lines": 26,
+      "branches_approx": 1,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_pdf_report.py",
+      "sha256": "1f950a5b5cff209082200e553ca82337293a8e4133b09956c0b82c4080d85619",
+      "lines": 182,
+      "nonblank": 160,
+      "functions": 8,
+      "test_functions": 6,
+      "max_function_lines": 47,
+      "branches_approx": 3,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_portfolio.py",
+      "sha256": "b2979c7e18f8534c012809059de8b7ba85a5ac4cb2af82714b4f80dc44094703",
+      "lines": 58,
+      "nonblank": 53,
+      "functions": 1,
+      "test_functions": 1,
+      "max_function_lines": 51,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_price_zones_ui.py",
+      "sha256": "4cb0685cef12496545056410cbd8b039d2766f9011dad024f577b89b09c1d239",
+      "lines": 106,
+      "nonblank": 88,
+      "functions": 8,
+      "test_functions": 8,
+      "max_function_lines": 20,
+      "branches_approx": 5,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_probability_calibration.py",
+      "sha256": "638e47abb926b9f7cbd171fb66f0791737afc14b65dd66d810eb70a380e60aa6",
+      "lines": 45,
+      "nonblank": 36,
+      "functions": 3,
+      "test_functions": 3,
+      "max_function_lines": 18,
+      "branches_approx": 3,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_projection_chart.py",
+      "sha256": "55a8f1b13fbc2b744b3be5c5aaed5143e06643f478b2f8bbbffd65a590e1dc62",
+      "lines": 107,
+      "nonblank": 86,
+      "functions": 6,
+      "test_functions": 6,
+      "max_function_lines": 25,
+      "branches_approx": 1,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_quant_minimal_view.py",
+      "sha256": "38ae43925919f7cfe2611593d19e8cb33df9f46d3925e8771494af262dae2b4b",
+      "lines": 38,
+      "nonblank": 35,
+      "functions": 1,
+      "test_functions": 1,
+      "max_function_lines": 31,
+      "branches_approx": 2,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_repository.py",
+      "sha256": "11a0a88ef868c7f7d0b87f91e5097250660a387050e6ab529bb73d7e169ea524",
+      "lines": 169,
+      "nonblank": 147,
+      "functions": 6,
+      "test_functions": 6,
+      "max_function_lines": 37,
+      "branches_approx": 1,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_streamlit_layout.py",
+      "sha256": "fffc4c5caa8197f4e5ea95cc444a99aebaca4139302407c3c65d53fb98bf0942",
+      "lines": 61,
+      "nonblank": 48,
+      "functions": 4,
+      "test_functions": 4,
+      "max_function_lines": 18,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_technical_probability.py",
+      "sha256": "b0f7073aa39c219cd8a4d4f16cb4268f5e61f7f6e763e9afd938fa229f9da6ea",
+      "lines": 467,
+      "nonblank": 409,
+      "functions": 17,
+      "test_functions": 16,
+      "max_function_lines": 49,
+      "branches_approx": 0,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_ui_theme.py",
+      "sha256": "3509d34014d319a877b351b17b87cbfa28c8f1b48b63c0aeaf2a9bbf347062df",
+      "lines": 61,
+      "nonblank": 47,
+      "functions": 5,
+      "test_functions": 5,
+      "max_function_lines": 10,
+      "branches_approx": 1,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_weighted_zone_reach.py",
+      "sha256": "8e1ace0c220dc473a71f6857c1a71aab997dc3201344dbe750192c616d336731",
+      "lines": 71,
+      "nonblank": 61,
+      "functions": 5,
+      "test_functions": 5,
+      "max_function_lines": 16,
+      "branches_approx": 3,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_zone_pdf.py",
+      "sha256": "f159fb3ae7f8153358551bf7b23a24052ec090d3d55e333ba511fb94408ea742",
+      "lines": 45,
+      "nonblank": 37,
+      "functions": 3,
+      "test_functions": 2,
+      "max_function_lines": 11,
+      "branches_approx": 2,
+      "broad_except": 0,
+      "parse": "OK"
+    },
+    {
+      "path": "tests/test_zone_reach.py",
+      "sha256": "1feccc8941c1111da694e7e5e58fe153fbcdf27c6e4e4ae1a49f5857266a59bb",
+      "lines": 95,
+      "nonblank": 76,
+      "functions": 9,
+      "test_functions": 8,
+      "max_function_lines": 17,
+      "branches_approx": 2,
+      "broad_except": 0,
+      "parse": "OK"
+    }
+  ],
+  "tests": {
+    "returncode": 0,
+    "seconds": 38.378,
+    "summary": "136 passed in 37.48s"
+  },
+  "probes": [
+    {
+      "name": "calibration_brier",
+      "values": {
+        "status": "Probabilidad empíricamente calibrada",
+        "raw_brier": 0.81,
+        "calibrated_prediction": 0.5,
+        "sample_size": 500
+      }
+    },
+    {
+      "name": "short_asymmetry",
+      "values": {
+        "long_count": 1,
+        "short_count": 0,
+        "long_scores": [
+          5.5
+        ],
+        "short_rejections": {
+          "Confluencia direccional insuficiente": 1
+        }
+      }
+    },
+    {
+      "name": "gap_fill",
+      "values": {
+        "entry": 100.0,
+        "stop": 97.75,
+        "gap_open": 90,
+        "simulated_exit": 97.75
+      }
+    },
+    {
+      "name": "flat_oscillator",
+      "values": {
+        "last_rsi": 100.0,
+        "finite_stoch": 0,
+        "finite_adx": 0
+      }
+    },
+    {
+      "name": "projection_holidays",
+      "values": {
+        "non_exchange_sessions": [
+          "2026-09-07"
+        ]
+      }
+    },
+    {
+      "name": "period_mismatch",
+      "values": {
+        "cash_conversion": 4.0,
+        "fcf_margin": 0.2,
+        "quarter_cash_conversion": 1.0,
+        "quarter_fcf_margin": 0.05
+      }
+    },
+    {
+      "name": "outcome_integrity",
+      "values": {
+        "valid_before": 1,
+        "valid_after_tamper": 1,
+        "invalid_after": [],
+        "samples_after_tamper": [
+          [
+            0.8,
+            0
+          ]
+        ]
+      }
+    },
+    {
+      "name": "late_horizon",
+      "values": {
+        "requested_minutes": 60,
+        "resolved_minutes": 4320
+      }
+    },
+    {
+      "name": "synthetic_performance",
+      "values": {
+        "engine_seconds": 1.3567,
+        "pdf_seconds": {
+          "executive": 0.0372,
+          "technical": 0.1432,
+          "combined": 0.149,
+          "master": 0.1625
+        },
+        "pdf_bytes": {
+          "executive": 12967,
+          "technical": 74371,
+          "combined": 82679,
+          "master": 84025
+        }
+      }
+    }
+  ],
+  "findings_catalog_sha256": "ae3b9c865fba3b3e998f1da34353f7760acb624a76d35367e71ee80f65f56f21",
+  "findings": [
+    {
+      "id": "F01",
+      "priority": "ALTA",
+      "title": "Resultados de predicciones fuera de la cobertura SHA-256",
+      "evidence_type": "REPRODUCIDO",
+      "observation": "El hash de live_model_observations cubre el pronóstico, no outcome_price, outcome_up, successful ni resolved_at. Alterar esos campos conserva la verificación y cambia las muestras de calibración.",
+      "impact": "Se pueden aprobar resultados alterados; no demuestra corrupción del libro contable.",
+      "recommendation": "Resoluciones inmutables con hash enlazado al pronóstico, vencimiento y procedencia del precio; verificar ambas partes antes de calibrar. Un hash sin clave no autentica frente a quien pueda reescribirlo.",
+      "acceptance": "Alterar cualquier dato de resolución debe invalidar su integridad y excluir la muestra.",
+      "probe": "outcome_integrity",
+      "references": [
+        {
+          "path": "portfolio_tracker/repository.py",
+          "anchor": "def _live_observation_payload(",
+          "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+        },
+        {
+          "path": "portfolio_tracker/repository.py",
+          "anchor": "def verify_live_model_observations(",
+          "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/repository.py:549",
+        "portfolio_tracker/repository.py:750"
+      ]
+    },
+    {
+      "id": "F02",
+      "priority": "ALTA",
+      "title": "Realimentación con precios posteriores al horizonte anunciado",
+      "evidence_type": "REPRODUCIDO",
+      "observation": "resolve_live_model_observations aplica el precio actual a todas las observaciones vencidas. Usa minutos naturales sin recuperar el cierre exacto: un horizonte de 60 minutos del viernes se resuelve el lunes, 4.320 minutos después. as_of usa apertura de vela aunque el cierre se conoce después.",
+      "impact": "Las etiquetas y el acierto no representan el horizonte anunciado.",
+      "recommendation": "Horizontes de sesión y timestamps observed_at/available_at separados; resolver con el cierre histórico del vencimiento o abstenerse si falta.",
+      "acceptance": "Una resolución tardía conserva el resultado del vencimiento, no el precio actual; probar festivos y medias sesiones.",
+      "probe": "late_horizon",
+      "references": [
+        {
+          "path": "portfolio_tracker/repository.py",
+          "anchor": "def resolve_live_model_observations(",
+          "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+        },
+        {
+          "path": "portfolio_tracker/analytics/technical_probability.py",
+          "anchor": "as_of = latest_timestamp.to_pydatetime()",
+          "reviewed_sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/repository.py:622",
+        "portfolio_tracker/analytics/technical_probability.py:1161"
+      ]
+    },
+    {
+      "id": "F03",
+      "priority": "ALTA",
+      "title": "Etiqueta calibrada sin Brier validado fuera de muestra",
+      "evidence_type": "REPRODUCIDO / METODOLÓGICO",
+      "observation": "El Brier se calcula sobre scores crudos y la isotónica se ajusta sobre las mismas muestras. Con 500 registros y dos bins concede etiqueta calibrada sin holdout independiente. El caso invertido tiene Brier crudo 0,81 y recibe esa etiqueta. La consulta distingue símbolo/horizonte, no versión completa de modelo y parámetros; observaciones solapadas cuentan como muestras.",
+      "impact": "Se confunde ajuste in-sample con fiabilidad validada. El Brier 0,81 del ejemplo es del score crudo, no del calibrador ajustado.",
+      "recommendation": "Separar entrenamiento, calibración y prueba temporal purgada. Medir Brier crudo/calibrado contra baseline por versión, régimen y tamaño efectivo.",
+      "acceptance": "La etiqueta OOS exige prueba independiente; el Brier mostrado corresponde a la salida realmente publicada.",
+      "probe": "calibration_brier",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/probability_calibration.py",
+          "anchor": "def calibrate_probability(",
+          "reviewed_sha256": "08cbe37605006b27315d45e0e940e568883c60c631f3df54fa18f09cb36c6c3c"
+        },
+        {
+          "path": "portfolio_tracker/repository.py",
+          "anchor": "def live_model_calibration_samples(",
+          "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/probability_calibration.py:109",
+        "portfolio_tracker/repository.py:708"
+      ]
+    },
+    {
+      "id": "F04",
+      "priority": "ALTA",
+      "title": "Calibración binaria aplicada a tres escenarios distintos",
+      "evidence_type": "ESTÁTICO",
+      "observation": "La UI calibra cierre superior al precio de referencia, conserva rango heurístico, recorta subida a 100 menos rango y obtiene bajada por complemento. El calibrador principal consume muestras de 390 minutos generadas por otro score de horizonte. No se regeneran todos los objetivos y etiquetas después.",
+      "impact": "Los porcentajes de subida/rango/bajada no comparten un contrato estadístico validado; el Brier puede no corresponder al valor mostrado.",
+      "recommendation": "Definir eventos excluyentes y calibración multiclase o mostrar el evento binario por separado. Consolidar snapshot final e identidad de score.",
+      "acceptance": "Tabla, decisión y PDF usan el mismo corte, evento y versión sin recortes posteriores etiquetados como calibrados.",
+      "references": [
+        {
+          "path": "app.py",
+          "anchor": "calibrated_up = min(",
+          "reviewed_sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af"
+        },
+        {
+          "path": "app.py",
+          "anchor": "primary_calibration = calibrate_probability(",
+          "reviewed_sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af"
+        }
+      ],
+      "locations": [
+        "app.py:1574",
+        "app.py:1588"
+      ]
+    },
+    {
+      "id": "F05",
+      "priority": "ALTA",
+      "title": "Asimetría LONG/SHORT en el score del backtest",
+      "evidence_type": "REPRODUCIDO",
+      "observation": "El score inicia con 3*direction; MACD y EMA vuelven a multiplicar por direction y luego todo se multiplica otra vez. Un LONG alineado obtiene 5,5 y su espejo SHORT se rechaza por falta de confluencia.",
+      "impact": "La selección y optimización histórica pueden sesgarse por dirección sin diferencia económica en las entradas.",
+      "recommendation": "Expresar los componentes como evidencia global o como fuerza relativa a la operación; no mezclar ambas convenciones.",
+      "acceptance": "Escenarios espejo con costes simétricos reciben la misma fuerza y aceptación.",
+      "probe": "short_asymmetry",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/backtesting.py",
+          "anchor": "score = 3.0 * direction",
+          "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/backtesting.py:339"
+      ]
+    },
+    {
+      "id": "F06",
+      "priority": "ALTA",
+      "title": "Backtest distinto al motor vivo y parámetros globales sin promoción",
+      "evidence_type": "ESTÁTICO",
+      "observation": "El simulador usa reglas diarias propias, no RegimeEngine/SetupEngine/TriggerEngine de 5m/1h/4h. latest_backtest_parameters devuelve la última configuración global, sin selector de símbolo ni aprobación cuantitativa explícita; la UI utiliza su ATR.",
+      "impact": "El histórico no valida la estrategia exacta anunciada; una corrida rechazada o de otro activo puede influir en el plan actual.",
+      "recommendation": "Núcleo causal compartido entre replay y vivo; configuración por modelo/activo/marco con promoción explícita y rollback.",
+      "acceptance": "Replay y vivo producen igual régimen/setup/gatillo; otra emisora o corrida rechazada no cambia la configuración activa.",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/backtesting.py",
+          "anchor": "def _generate_candidates(",
+          "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+        },
+        {
+          "path": "portfolio_tracker/repository.py",
+          "anchor": "def latest_backtest_parameters(",
+          "reviewed_sha256": "8a32de34e7d2b89ff4adfe1008ee01a7e02541e29eee8881b7cd634aceaf3afd"
+        },
+        {
+          "path": "app.py",
+          "anchor": "calibrated_parameters = repository.latest_backtest_parameters()",
+          "reviewed_sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/backtesting.py:277",
+        "portfolio_tracker/repository.py:532",
+        "app.py:1486"
+      ]
+    },
+    {
+      "id": "F07",
+      "priority": "ALTA",
+      "title": "Gaps y drawdown subestiman riesgo en la simulación",
+      "evidence_type": "REPRODUCIDO / ESTÁTICO",
+      "observation": "El stop se liquida en su nivel aunque la apertura salte más allá. Caso: entrada 100, stop 97,75, apertura 90, salida 97,75. La curva de calculate_metrics registra cierres de trades, no pérdidas flotantes. El benchmark EMA no aplica liquidación final si queda expuesto.",
+      "impact": "Pérdidas por salto y drawdown intraposición quedan subestimados; los costes finales no son homogéneos.",
+      "recommendation": "Fills conservadores según apertura, spread y slippage; equity marcado a mercado y política de liquidación común.",
+      "acceptance": "Un gap adverso no rellena a precio inaccesible; pérdidas flotantes aparecen en drawdown aunque luego recuperen.",
+      "probe": "gap_fill",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/backtesting.py",
+          "anchor": "def _simulate_trade(",
+          "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+        },
+        {
+          "path": "portfolio_tracker/analytics/backtesting.py",
+          "anchor": "def calculate_metrics(",
+          "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+        },
+        {
+          "path": "portfolio_tracker/analytics/backtesting.py",
+          "anchor": "def _benchmark_metrics(",
+          "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/backtesting.py:394",
+        "portfolio_tracker/analytics/backtesting.py:499",
+        "portfolio_tracker/analytics/backtesting.py:598"
+      ]
+    },
+    {
+      "id": "F08",
+      "priority": "ALTA",
+      "title": "Velas cerradas sin garantía central de vigencia o finitud",
+      "evidence_type": "REPRODUCIDO / ESTÁTICO",
+      "observation": "dropna conjunto puede retroceder a una vela anterior con indicadores completos. Falta un veto intradía central de vigencia compartido con zonas. Con precio plano el RSI resulta 100 y StochRSI/ADX quedan indefinidos.",
+      "impact": "Puede presentarse un corte antiguo o fallar el análisis; precio plano no equivale a sobrecompra real.",
+      "recommendation": "Validar finitud/antigüedad antes de operar; estado UNKNOWN para indicadores indefinidos y corte explícito, sin retroceso silencioso.",
+      "acceptance": "Series planas, retrasos y huecos producen aviso/veto, no señal fresca; UI y PDF comparten validación.",
+      "probe": "flat_oscillator",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/technical_probability.py",
+          "anchor": "intraday_indicators = add_intraday_indicators(intraday).dropna(",
+          "reviewed_sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df"
+        },
+        {
+          "path": "portfolio_tracker/analytics/technical_probability.py",
+          "anchor": "def _rsi(",
+          "reviewed_sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/technical_probability.py:868",
+        "portfolio_tracker/analytics/technical_probability.py:362"
+      ]
+    },
+    {
+      "id": "F09",
+      "priority": "ALTA",
+      "title": "Ratios fundamentales con periodos y signos incompatibles",
+      "evidence_type": "REPRODUCIDO / ESTÁTICO",
+      "observation": "OCF/FCF de info se priorizan frente a estados trimestrales y se dividen entre beneficio/revenue trimestrales sin verificar periodos. El caso arroja cash conversion 4 y FCF 20% frente a 1 y 5% trimestrales. Cocientes entre dos negativos pueden parecer favorables; or descarta ceros legítimos.",
+      "impact": "La calidad de beneficios puede recibir bonos injustificados.",
+      "recommendation": "Conservar periodo/unidad/disponibilidad y alinear TTM con TTM o trimestre con trimestre. Tratar pérdidas y caja negativa por separado; distinguir None de cero.",
+      "acceptance": "Periodos incompatibles no producen ratio válido; valores cero se preservan y dos negativos no generan señal favorable.",
+      "probe": "period_mismatch",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/fundamental_news.py",
+          "anchor": "def build_fundamental_snapshot(",
+          "reviewed_sha256": "dc16770bd104e0f1d20ca1333844955359d9dc8737dbb58b8f4332e88efbee2a"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/fundamental_news.py:267"
+      ]
+    },
+    {
+      "id": "F10",
+      "priority": "MEDIA",
+      "title": "EXIT_PENDING no reevalúa el riesgo del remanente",
+      "evidence_type": "ESTÁTICO",
+      "observation": "synchronize_position omite gestión si el estado ya es EXIT_PENDING. Una salida parcial conserva el episodio y ese estado; no vuelve a verificar stop/invalidez por esa rama.",
+      "impact": "La alerta puede seguir mostrando el objetivo previo aunque el riesgo de la cantidad restante haya cambiado. No implica ejecución automática.",
+      "recommendation": "Separar alerta pendiente, posición y remanente; reevaluar riesgo con transiciones idempotentes sin crear fills.",
+      "acceptance": "Después de una salida parcial real, romper el stop actualiza la gestión del saldo.",
+      "references": [
+        {
+          "path": "portfolio_tracker/services/operational_state.py",
+          "anchor": "elif fresh and state[\"status\"] != \"EXIT_PENDING\":",
+          "reviewed_sha256": "74dcd31277e182b142a21f310bd160a7e8625e1cf8e9d60d76659a5974fb479f"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/services/operational_state.py:83"
+      ]
+    },
+    {
+      "id": "F11",
+      "priority": "MEDIA",
+      "title": "Planes duplicados y R:R SHORT calculado en el extremo favorable",
+      "evidence_type": "ESTÁTICO",
+      "observation": "buy_levels/sell_levels se reconstruyen sin confirmed_pattern_target y pueden sustituir al plan original en UI/adopción. SHORT usa entry_high para su R:R, no el extremo inferior desfavorable.",
+      "impact": "La tarjeta puede perder el objetivo de patrón y no garantizar el ratio mínimo en toda la zona SHORT.",
+      "recommendation": "Una única estructura final con procedencia del objetivo y R:R desde el extremo desfavorable o fill real.",
+      "acceptance": "UI/estado/PDF comparten niveles; ambos extremos cumplen el ratio o se especifica el fill requerido.",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/technical_probability.py",
+          "anchor": "scenario_args = dict(",
+          "reviewed_sha256": "198a0c45eabbd572b07d2a224aa830d9724afb75aae88be1907d5284165dc8df"
+        },
+        {
+          "path": "portfolio_tracker/analytics/multi_timeframe.py",
+          "anchor": "entry_high - 1.5 * (stop_loss - entry_high)",
+          "reviewed_sha256": "d46880ae9184a256e52ef7f1205198749a48e806253af1fb9d4469d12631a3c1"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/technical_probability.py:1256",
+        "portfolio_tracker/analytics/multi_timeframe.py:511"
+      ]
+    },
+    {
+      "id": "F12",
+      "priority": "MEDIA",
+      "title": "Proyección con festivos no operables y snapshot desalineado",
+      "evidence_type": "REPRODUCIDO / ESTÁTICO",
+      "observation": "pd.bdate_range solo elimina fines de semana; incluye el festivo XNYS 7 de septiembre de 2026. Deriva/semilla dependen del score intradía y ajustes fundamentales/calibración posteriores no regeneran toda la trayectoria y etiquetas.",
+      "impact": "Fechas inválidas y narrativa distinta al escenario. Una trayectoria bootstrap no es precio esperado ni probabilidad calibrada.",
+      "recommendation": "Usar calendario compartido, separar horizonte swing de micro-momentum y generar snapshot tras filtros; etiquetar escenario ilustrativo.",
+      "acceptance": "Quince fechas son sesiones XNYS válidas; metadata y trayectoria corresponden al mismo corte.",
+      "probe": "projection_holidays",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/multi_timeframe.py",
+          "anchor": "future_dates = pd.bdate_range(",
+          "reviewed_sha256": "d46880ae9184a256e52ef7f1205198749a48e806253af1fb9d4469d12631a3c1"
+        },
+        {
+          "path": "portfolio_tracker/analytics/multi_timeframe.py",
+          "anchor": "def calculate_15_day_projection(",
+          "reviewed_sha256": "d46880ae9184a256e52ef7f1205198749a48e806253af1fb9d4469d12631a3c1"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/multi_timeframe.py:725",
+        "portfolio_tracker/analytics/multi_timeframe.py:577"
+      ]
+    },
+    {
+      "id": "F13",
+      "priority": "MEDIA",
+      "title": "Probabilidades por zona: varios contextos, sin validación OOS",
+      "evidence_type": "RIESGO METODOLÓGICO",
+      "observation": "El método ponderado mezcla 25% uniforme/75% similitud y reescala por ATR residual. Permite 12 sesiones y tamaño efectivo 8; Wilson ponderado es aproximado con dependencia entre sesiones. Un mes de 5m y filtrado previo restringen la muestra. No registra resultados por zona/toque/cierre para calibrar estos ajustes.",
+      "impact": "Más factores no prueban más precisión. Los intervalos no incluyen toda la incertidumbre de pesos/modelo.",
+      "recommendation": "Guardar pronósticos por nivel y sus resultados; comparar OOS contra frecuencia y baseline ATR, eliminar componentes para medir su aporte y remuestrear por sesión.",
+      "acceptance": "Brier/fiabilidad por toque y cierre con cobertura de intervalos y mínimos efectivos justificados; mantener etiqueta no calibrada.",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/conditional_zone_reach.py",
+          "anchor": "def _similarity(",
+          "reviewed_sha256": "996025775d1e74452276b8d52af00f2f8fc7abf2d1d58328ebfeb621e7a0ac06"
+        },
+        {
+          "path": "portfolio_tracker/analytics/conditional_zone_reach.py",
+          "anchor": "effective = float(",
+          "reviewed_sha256": "996025775d1e74452276b8d52af00f2f8fc7abf2d1d58328ebfeb621e7a0ac06"
+        },
+        {
+          "path": "portfolio_tracker/services/price_zones.py",
+          "anchor": "def build_zone_snapshot(",
+          "reviewed_sha256": "563bca5a09823766fd2dea4332455fdf144b878f16f8a0e384d3e7574916429c"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/conditional_zone_reach.py:66",
+        "portfolio_tracker/analytics/conditional_zone_reach.py:191",
+        "portfolio_tracker/services/price_zones.py:126"
+      ]
+    },
+    {
+      "id": "F14",
+      "priority": "MEDIA",
+      "title": "Fuentes incompletas de noticias/eventos pueden aparentar neutralidad",
+      "evidence_type": "ESTÁTICO",
+      "observation": "Sentimiento por palabras clave sin tratamiento sistemático de negaciones. Calendario centrado en earnings/dividendos, no macro exhaustivo. safe_read captura fallos y devuelve valores vacíos; una descarga parcial no diferencia proveedor caído de ausencia de eventos.",
+      "impact": "Puede faltar un veto temporal o interpretarse información ausente como bajo riesgo.",
+      "recommendation": "Estados OK/STALE/UNKNOWN por fuente y trazabilidad de errores; calendario macro autorizado; evaluar sentimiento con corpus etiquetado.",
+      "acceptance": "Fuente caída no equivale a calendario sin riesgo; probar negaciones y expiración de datos.",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/fundamental_news.py",
+          "anchor": "def safe_read(",
+          "reviewed_sha256": "dc16770bd104e0f1d20ca1333844955359d9dc8737dbb58b8f4332e88efbee2a"
+        },
+        {
+          "path": "portfolio_tracker/analytics/fundamental_news.py",
+          "anchor": "def _news_items(",
+          "reviewed_sha256": "dc16770bd104e0f1d20ca1333844955359d9dc8737dbb58b8f4332e88efbee2a"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/fundamental_news.py:492",
+        "portfolio_tracker/analytics/fundamental_news.py:213"
+      ]
+    },
+    {
+      "id": "F15",
+      "priority": "MEDIA",
+      "title": "Trabajo repetido de exportación y verificación creciente",
+      "evidence_type": "ESTÁTICO / MEDICIÓN SINTÉTICA",
+      "observation": "Cada actualización genera cuatro PDFs antes de terminar la vista; tres reconstruyen gráficas técnicas. La caché de descarga no evita recalcular el análisis. read_state recorre toda la cadena y se invoca nuevamente en el flujo.",
+      "impact": "Latencia y memoria innecesarias que crecen con usuarios/historial. Los tiempos anexos son sintéticos locales, no carga real.",
+      "recommendation": "PDF bajo demanda o caché por hash de snapshot, reutilización de imágenes y verificación incremental con auditoría completa periódica.",
+      "acceptance": "Igual snapshot no regenera cuatro documentos; medir p50/p95 y memoria sin omitir controles de integridad.",
+      "probe": "synthetic_performance",
+      "references": [
+        {
+          "path": "app.py",
+          "anchor": "executive_pdf = build_executive_report(",
+          "reviewed_sha256": "2cd8e870f58502276a246233c5a51e5f0b895064f7e824c1935457fefa07d4af"
+        },
+        {
+          "path": "portfolio_tracker/services/operational_state.py",
+          "anchor": "def read_state(",
+          "reviewed_sha256": "74dcd31277e182b142a21f310bd160a7e8625e1cf8e9d60d76659a5974fb479f"
+        }
+      ],
+      "locations": [
+        "app.py:1685",
+        "portfolio_tracker/services/operational_state.py:22"
+      ]
+    },
+    {
+      "id": "F16",
+      "priority": "MEDIA",
+      "title": "Marcador de implementación estático y riesgo visual oculto",
+      "evidence_type": "ESTÁTICO",
+      "observation": "implementation_status fija 89 pruebas y fecha 2026-08-31; contar funciones AST no equivale a casos pytest parametrizados ejecutados. CSS oculta bloques de decisión/explicación sin garantizar un indicador compacto equivalente junto a las zonas.",
+      "impact": "100% puede confundirse con verificación vigente; ver niveles no implica autorización actual.",
+      "recommendation": "Mostrar artefacto real de pruebas con fecha y commit; mantener una única señal de veto/disponibilidad visible sin saturación.",
+      "acceptance": "El contador coincide con la versión comprobada; una zona nunca aparenta autorización bajo veto.",
+      "references": [
+        {
+          "path": "portfolio_tracker/services/implementation_status.py",
+          "anchor": "LAST_VERIFIED_TESTS = 89",
+          "reviewed_sha256": "cd2988e40ae6b63f1fc27765b4b6b9a2e6475cfa1770b800cb370edf69d1b0d3"
+        },
+        {
+          "path": "portfolio_tracker/ui/theme.py",
+          "anchor": ".st-key-quant_decision,",
+          "reviewed_sha256": "fe676b86d1504a22471fc92276bfcb8b54fc6abca5013c667ad82f19f79eadaa"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/services/implementation_status.py:10",
+        "portfolio_tracker/ui/theme.py:637"
+      ]
+    },
+    {
+      "id": "F17",
+      "priority": "MEDIA",
+      "title": "Contrato de tolerancia y vigencia de patrones incompleto",
+      "evidence_type": "ESTÁTICO",
+      "observation": "Simetría permite 0,50 ATR frente al antiguo requisito de 0,5% del ATR: una interpretación 100 veces distinta que debe aclararse antes de cambiarse. La confirmación retiene un breakout de la ventana sin ciclo explícito de agotamiento/invalidación. Confianza es score geométrico.",
+      "impact": "Un patrón anterior puede seguir influyendo como activo; confianza no es frecuencia empírica de éxito.",
+      "recommendation": "Documentar unidades y estados candidato/confirmado/agotado/invalidado; calibrar antes de llamar probabilidad a la confianza.",
+      "acceptance": "Patrones vencidos/invalidos no vetan ni bonifican; pruebas de unidades y ciclo completo.",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/chart_patterns.py",
+          "anchor": "if symmetry_atr > 0.50:",
+          "reviewed_sha256": "c56f9168a4f85febd883cdf7727c853d8f8f090c30226c4eb100a5ed5050214b"
+        },
+        {
+          "path": "portfolio_tracker/analytics/chart_patterns.py",
+          "anchor": "def evaluate_pattern_influence(",
+          "reviewed_sha256": "c56f9168a4f85febd883cdf7727c853d8f8f090c30226c4eb100a5ed5050214b"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/chart_patterns.py:261",
+        "portfolio_tracker/analytics/chart_patterns.py:608"
+      ]
+    },
+    {
+      "id": "F18",
+      "priority": "MEDIA",
+      "title": "Walk-forward sin purga explícita de madurez y con capital de fold ambiguo",
+      "evidence_type": "ESTÁTICO / RIESGO METODOLÓGICO",
+      "observation": "Folds por cantidad de candidatos agregan trades completos a la calibración sin recortar exit/available_at frente al inicio siguiente. Se calcula probabilidad antes de rechazar solapamientos; ese rechazo protege entradas, pero no prueba causalidad de todas las etiquetas/métricas. Los folds usan capital inicial para reportar y equity acumulada para dimensionar.",
+      "impact": "Límites temporales y denominadores pueden ser incoherentes. No se demostró inflación de retornos reales por este caso.",
+      "recommendation": "Folds temporales con purga por madurez y embargo; filtrar evidencia disponible por corte y usar equity inicial real de cada fold.",
+      "acceptance": "Ninguna etiqueta futura se usa en su corte; conciliar métricas por fold con la curva global.",
+      "references": [
+        {
+          "path": "portfolio_tracker/analytics/backtesting.py",
+          "anchor": "calibration_evidence.extend(fold_trades)",
+          "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+        },
+        {
+          "path": "portfolio_tracker/analytics/backtesting.py",
+          "anchor": "fold_metrics, _ = calculate_metrics(",
+          "reviewed_sha256": "4d257a9a6a18662656f4e8b9954dc556e0a7fbb168954ac2b26f195cd6f1c0eb"
+        }
+      ],
+      "locations": [
+        "portfolio_tracker/analytics/backtesting.py:743",
+        "portfolio_tracker/analytics/backtesting.py:727"
+      ]
+    }
+  ],
+  "preservation": {
+    "status": "SIN CAMBIOS",
+    "compared": 77,
+    "changed_count": 0,
+    "added_count": 0
+  },
+  "versions": {
+    "pandas": "2.3.3",
+    "numpy": "2.5.2",
+    "streamlit": "1.62.0",
+    "reportlab": "4.5.1",
+    "yfinance": "1.7.0",
+    "exchange-calendars": "4.13.2",
+    "pytest": "9.1.1",
+    "cryptography": "46.0.7"
+  }
+}

@@ -33,7 +33,7 @@ from portfolio_tracker.analytics.fundamental_news import (
     snapshot_from_payload,
     snapshot_to_payload,
 )
-from portfolio_tracker.analytics.probability_calibration import calibrate_probability
+from portfolio_tracker.analytics.probability_calibration import calibrate_scenarios
 from portfolio_tracker.analytics.risk import concentration_warnings
 from portfolio_tracker.analytics.multi_timeframe import MacroTrend
 from portfolio_tracker.analytics.technical_probability import (
@@ -88,6 +88,8 @@ from portfolio_tracker.services.quant_market_data import (
 from portfolio_tracker.services.receipt_storage import ReceiptStorage
 from portfolio_tracker.services.validation import validate_trade
 from portfolio_tracker.ui import apply_premium_ui, premium_bar_chart, premium_line_chart
+from portfolio_tracker.ui.price_zones import render_price_zones
+from portfolio_tracker.services.price_zones import build_zone_snapshot
 
 
 st.set_page_config(
@@ -100,9 +102,11 @@ apply_premium_ui()
 
 
 @st.cache_resource
-def get_repository() -> PortfolioRepository:
+def get_repository(schema_revision: int = 9) -> PortfolioRepository:
     database = Database(DB_PATH)
     database.initialize()
+    if database.schema_version() < schema_revision:
+        raise RuntimeError("La migración requerida para observaciones en vivo no se completó.")
     repository = PortfolioRepository(database)
     repository.ensure_initial_capital()
     return repository
@@ -178,10 +182,12 @@ def fetch_fundamental_snapshot(symbol: str) -> FundamentalNewsSnapshot:
 
 
 @st.cache_data(ttl=6 * 60 * 60, max_entries=32, show_spinner=False)
-def fetch_backtest_frame(symbol: str, period: str) -> pd.DataFrame:
-    """Histórico cacheado por emisora y ventana para evitar descargas repetidas."""
+def fetch_backtest_frame(symbol: str, period: str):
+    """Replay cacheado con la misma fuente 5m/diaria del motor en vivo."""
 
-    return download_backtest_daily(symbol, period)
+    from portfolio_tracker.analytics.replay import ReplayDataset
+    intraday, daily = download_quant_frames(symbol)
+    return ReplayDataset(intraday, daily, datetime.now(timezone.utc))
 
 
 def current_fx(repository: PortfolioRepository) -> tuple[FxQuote | None, str | None]:
@@ -971,6 +977,7 @@ def _render_probability_executive(
     analysis: ProbabilityAnalysis,
     *,
     adaptive_probability_threshold: float | None = None,
+    zone_snapshot=None,
 ) -> None:
     """Panel de decisión breve; no vuelve a consultar ni recalcula datos de mercado."""
 
@@ -990,6 +997,23 @@ def _render_probability_executive(
         )
         decision_tone = "warning"
     levels = analysis.execution_levels
+    render_price_zones(analysis, zone_snapshot=zone_snapshot)
+    legacy_zones_slot = st.empty()
+    with legacy_zones_slot.container():
+        if analysis.buy_levels is not None and analysis.sell_levels is not None:
+            with st.container(key="quant_hierarchy_duplicate"):
+                st.caption(f"Régimen mayor: {analysis.macro_permission} · Estado persistente: {analysis.position_state}")
+                st.caption(analysis.hierarchy_detail)
+            purchase, sale = st.columns(2, gap="small")
+            with purchase, st.container(border=True, key="quant_buy_zone"):
+                st.markdown("**Zona de compra / entrada ideal**")
+                st.metric("Entrada LONG", f"${analysis.buy_levels.entry_low:,.2f} – ${analysis.buy_levels.entry_high:,.2f}")
+                st.caption(f"Stop ${analysis.buy_levels.stop_loss:,.2f} · Escenario sujeto a régimen y gatillo cerrado.")
+            with sale, st.container(border=True, key="quant_sell_zone"):
+                st.markdown("**Zona de venta / objetivos y resistencia**")
+                st.metric("TP1 / TP2 del LONG", f"${analysis.buy_levels.take_profit_1:,.2f} / ${analysis.buy_levels.take_profit_2:,.2f}")
+                st.caption(f"Zona SHORT de referencia: ${analysis.sell_levels.entry_low:,.2f} – ${analysis.sell_levels.entry_high:,.2f}. No equivale a autorización de venta en corto.")
+    legacy_zones_slot.empty()
     bearish_plan = levels.direction == "SHORT"
     zone_label = "Zona de salida / venta" if bearish_plan else "Zona de entrada ideal"
     stop_label = "Invalidación bajista" if bearish_plan else "Stop loss técnico"
@@ -997,79 +1021,85 @@ def _render_probability_executive(
     icon = "🟢" if decision_tone == "success" else "🔴" if decision_tone == "danger" else "🟠"
     message = (
         f"### {icon} {decision_label}\n\n{decision_rationale}\n\n"
-        f"**Estado del plan:** {'CONDICIONAL' if analysis.execution_plan_conditional else 'VALIDADO'}  \n"
+        f"**Estado del plan:** {analysis.execution_plan_label}  \n"
         f"**{zone_label}:** \\${levels.entry_low:,.2f} - \\${levels.entry_high:,.2f}  \n"
         f"**{stop_label}:** \\${levels.stop_loss:,.2f}  \n"
         f"**{target_label} 1:** \\${levels.take_profit_1:,.2f} · "
         f"**{target_label} 2:** \\${levels.take_profit_2:,.2f}"
     )
-    if decision_tone == "success":
-        st.success(message)
-    elif decision_tone == "danger":
-        st.error(message)
-    else:
-        st.warning(message)
+    with st.container(key="quant_decision"):
+        if decision_tone == "success":
+            st.success(message)
+        elif decision_tone == "danger":
+            st.error(message)
+        else:
+            st.warning(message)
     score_suffix = "%" if analysis.has_empirical_probability else "/100"
-    st.caption(
-        f"{analysis.bullish_display_label}: {analysis.probability_up:.1f}{score_suffix} "
-        f"({analysis.calibration_disclosure})."
-    )
+    with st.container(key="quant_hidden_score"):
+        st.caption(
+            f"{analysis.bullish_display_label}: {analysis.probability_up:.1f}{score_suffix} "
+            f"({analysis.calibration_disclosure})."
+        )
 
-    with st.container(border=True):
-        st.markdown("**Detonante cuantitativo de activación**")
-        st.write(analysis.activation_trigger)
-        with st.container(horizontal=True):
-            st.badge(
-                "Cumplido" if analysis.activation_trigger_met else "Pendiente",
-                icon=":material/check_circle:" if analysis.activation_trigger_met else ":material/schedule:",
-                color="green" if analysis.activation_trigger_met else "orange",
-            )
-            if analysis.tactical_short:
-                st.badge("SHORT táctico contra tendencia mensual", color="orange")
-            st.caption(f"Factor de exposición relativo: {analysis.exposure_factor:.2f}x")
+    with st.container(key="quant_hidden_activation"):
+        with st.expander("Condiciones de activación", expanded=False):
+            st.markdown("**Detonante cuantitativo de activación**")
+            st.write(analysis.activation_trigger)
+            with st.container(horizontal=True):
+                st.badge(
+                    "Cumplido" if analysis.activation_trigger_met else "Pendiente",
+                    icon=":material/check_circle:" if analysis.activation_trigger_met else ":material/schedule:",
+                    color="green" if analysis.activation_trigger_met else "orange",
+                )
+                if analysis.tactical_short:
+                    st.badge("SHORT táctico contra tendencia mensual", color="orange")
+                st.caption(f"Factor de exposición relativo: {analysis.exposure_factor:.2f}x")
 
     if analysis.neckline_heat_warning:
         st.error(analysis.neckline_heat_warning, icon=":material/local_fire_department:")
 
-    with st.container(horizontal=True):
-        st.metric(
-            zone_label,
-            f"{levels.entry_low:,.2f} - {levels.entry_high:,.2f} USD",
-            border=True,
-            icon=":material/login:",
-            help=(
-                "Zona informativa. Si el plan es condicional, no ejecutar hasta que el precio y los osciladores validen el retroceso."
-            ),
-        )
-        st.metric(
-            stop_label,
-            f"${levels.stop_loss:,.2f}",
-            border=True,
-            icon=":material/shield:",
-            help=(
-                f"Stop dinámico: precio de entrada conservador - {levels.stop_atr_multiple:.2f} × ATR(14) 5m, "
-                f"respetando estructura técnica cuando sea más conservadora. "
-                f"ATR actual: ${levels.atr_5m:.4f}."
-            ),
-        )
-        st.metric(
-            f"{target_label} 1 · 1 hora",
-            f"${levels.take_profit_1:,.2f}",
-            border=True,
-            icon=":material/looks_one:",
-            help=(
-                (f"Alineado con {levels.pattern_target_label}. " if levels.pattern_target_applied else "")
-                + f"R:R de TP1 = {levels.take_profit_1_reward_risk:.2f}R; mínimo {levels.minimum_reward_risk:.1f}R."
-            ),
-        )
-        st.metric(
-            f"{target_label} 2 · 6 horas",
-            f"${levels.take_profit_2:,.2f}",
-            border=True,
-            icon=":material/looks_two:",
-        )
+    with st.container(key="quant_hidden_execution"):
+        with st.expander("Plan de ejecución detallado", expanded=False):
+            with st.container(horizontal=True):
+                st.metric(
+                    zone_label,
+                    f"{levels.entry_low:,.2f} - {levels.entry_high:,.2f} USD",
+                    border=True,
+                    icon=":material/login:",
+                    help=(
+                        "Zona informativa. Si el plan es condicional, no ejecutar hasta que el precio y los osciladores validen el retroceso."
+                    ),
+                )
+                st.metric(
+                    stop_label,
+                    f"${levels.stop_loss:,.2f}",
+                    border=True,
+                    icon=":material/shield:",
+                    help=(
+                        f"Stop dinámico: precio de entrada conservador - {levels.stop_atr_multiple:.2f} × ATR(14) 5m, "
+                        f"respetando estructura técnica cuando sea más conservadora. "
+                        f"ATR actual: ${levels.atr_5m:.4f}."
+                    ),
+                )
+                st.metric(
+                    f"{target_label} 1 · 1 hora",
+                    f"${levels.take_profit_1:,.2f}",
+                    border=True,
+                    icon=":material/looks_one:",
+                    help=(
+                        (f"Alineado con {levels.pattern_target_label}. " if levels.pattern_target_applied else "")
+                        + f"R:R de TP1 = {levels.take_profit_1_reward_risk:.2f}R; mínimo {levels.minimum_reward_risk:.1f}R."
+                    ),
+                )
+                st.metric(
+                    f"{target_label} 2 · 6 horas",
+                    f"${levels.take_profit_2:,.2f}",
+                    border=True,
+                    icon=":material/looks_two:",
+                )
 
-    with st.container(horizontal=True):
+    legacy_metrics_slot = st.empty()
+    with legacy_metrics_slot.container(horizontal=True, key="quant_core_metrics"):
         st.metric("Último precio", f"${analysis.last_price:,.2f}", border=True)
         st.metric(
             "Score operativo",
@@ -1084,7 +1114,7 @@ def _render_probability_executive(
             ),
         )
         st.metric(
-            "Régimen 5 min",
+            "Régimen mayor · S / D / 4h",
             analysis.market_regime,
             delta=analysis.position_size_policy,
             delta_color="inverse" if analysis.market_regime != "TENDENCIA CONFIRMADA" else "off",
@@ -1105,7 +1135,9 @@ def _render_probability_executive(
             border=True,
         )
 
-    _render_chart_patterns(analysis, compact=True)
+    legacy_metrics_slot.empty()
+    with st.expander("Patrones y estructuras", expanded=False):
+        _render_chart_patterns(analysis, compact=True)
 
     ordered_projections = ordered_horizon_projections(analysis.horizon_projections)
     horizon_frame = pd.DataFrame(
@@ -1121,7 +1153,7 @@ def _render_probability_executive(
                 "Motor": item.engine_name,
                 "Estado": item.probability_status,
                 "Muestra": item.calibration_samples,
-                "Brier": item.brier_score,
+                "Brier OOS": item.brier_score,
             }
             for item in ordered_projections
         ]
@@ -1160,7 +1192,7 @@ def _render_probability_executive(
                 "Objetivo ↓", format="$%.2f", width=105,
             ),
             "Muestra": st.column_config.NumberColumn(format="%d"),
-            "Brier": st.column_config.NumberColumn(format="%.3f"),
+            "Brier OOS": st.column_config.NumberColumn(format="%.3f"),
         },
     )
 
@@ -1407,53 +1439,69 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         "Motor cuantitativo · Fase 5",
         "Scores multi-temporales, calibración empírica y veto central de riesgo.",
     )
-    st.warning(
-        "Las lecturas se muestran como scores heurísticos sobre 100 mientras no exista "
-        "una muestra OOS masiva con Brier calibrado. No son probabilidades ni recomendaciones."
-    )
+    with st.container(key="quant_disclosure_duplicate"):
+        st.warning(
+            "Las lecturas se muestran como scores heurísticos sobre 100 mientras no exista "
+            "una muestra OOS masiva con Brier calibrado. No son probabilidades ni recomendaciones."
+        )
     # El contenedor conserva esta posición aunque los bytes se generen después.
     # Así los cuatro botones quedan físicamente encima de st.tabs.
-    actions_slot = st.container()
-    executive_tab, technical_tab, calibration_tab = st.tabs(
+    actions_slot = st.container(key="quant_actions")
+    executive_tab, technical_tab, calibration_tab, validation_tab = st.tabs(
         [
             "Vista Ejecutiva (Modo Rápido)",
             "Vista Técnica Avanzada (Completa)",
             "Calibración y backtesting",
+            "VALIDACIÓN",
         ],
         on_change="rerun",
     )
 
-    st.session_state.setdefault("predictor_symbol", "SMCI")
-    with st.form("probability_symbol_form", border=True):
-        with st.container(horizontal=True, vertical_alignment="bottom"):
-            symbol_input = st.text_input(
-                "Emisora",
-                value=st.session_state["predictor_symbol"],
-                placeholder="SMCI",
-                help="Ticker de Estados Unidos reconocido por Yahoo Finance.",
-            )
-            analyze_submitted = st.form_submit_button(
-                "Analizar", type="primary", icon=":material/analytics:"
-            )
-    if analyze_submitted:
-        try:
-            st.session_state["predictor_symbol"] = normalize_symbol(symbol_input)
-        except QuantMarketDataError as exc:
-            st.error(str(exc))
-            return
-    symbol = st.session_state["predictor_symbol"]
+    from portfolio_tracker.ui.forward_validation import catch_up, validation_panel
+    from portfolio_tracker.services.zone_forward import log_snapshot
+    repository.ensure_zone_forward_schema()
+    try:
+        forward_status = catch_up(str(repository.database.path))
+    except (ValueError, RuntimeError, OSError) as exc:
+        forward_status = {"errors": [f"Resolución forward pendiente: {exc}"]}
+    if validation_tab.open:
+        with validation_tab:
+            validation_panel(repository, forward_status)
+        return  # Validation remains accessible if live analysis/data are unavailable.
 
-    if st.button(
-        "Actualizar velas ahora",
-        icon=":material/refresh:",
-        key="refresh_probability_data",
-    ):
-        fetch_probability_frames.clear()
-        fetch_fundamental_snapshot.clear()
-        st.rerun()
+    with st.expander("Emisora y actualización", expanded=False):
+        st.session_state.setdefault("predictor_symbol", "SMCI")
+        with st.form("probability_symbol_form", border=True):
+            with st.container(horizontal=True, vertical_alignment="bottom"):
+                symbol_input = st.text_input(
+                    "Emisora",
+                    value=st.session_state["predictor_symbol"],
+                    placeholder="SMCI",
+                    help="Ticker de Estados Unidos reconocido por Yahoo Finance.",
+                )
+                analyze_submitted = st.form_submit_button(
+                    "Analizar", type="primary", icon=":material/analytics:"
+                )
+        if analyze_submitted:
+            try:
+                st.session_state["predictor_symbol"] = normalize_symbol(symbol_input)
+            except QuantMarketDataError as exc:
+                st.error(str(exc))
+                return
+        symbol = st.session_state["predictor_symbol"]
+
+        if st.button(
+            "Actualizar velas ahora",
+            icon=":material/refresh:",
+            key="refresh_probability_data",
+        ):
+            fetch_probability_frames.clear()
+            fetch_fundamental_snapshot.clear()
+            st.rerun()
 
     output = st.container()
-    calibrated_parameters = repository.latest_backtest_parameters() or {
+    from portfolio_tracker.analytics.backtesting import ENGINE_VERSION
+    calibrated_parameters = repository.latest_backtest_parameters(symbol=symbol, engine_version=ENGINE_VERSION) or {
         "minimum_probability": 0.55,
         "stop_atr_multiple": 2.25,
         "risk_per_trade_pct": 1.0,
@@ -1461,10 +1509,14 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
     try:
         with output.skeleton(height=360):
             intraday, daily = fetch_probability_frames(symbol)
+            from portfolio_tracker.services.operational_state import macro_memory
             analysis = analyze_probability(
                 symbol,
                 intraday,
                 daily,
+                previous_macro_trending=macro_memory(repository.database, symbol),
+                require_fresh=True,
+                as_of_time=datetime.now(timezone.utc),
                 atr_stop_multiple=float(
                     calibrated_parameters.get("stop_atr_multiple", 2.25)
                 ),
@@ -1515,90 +1567,68 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             fundamental_warning = f"El corte fundamental fue descartado: {exc}"
             fundamental_snapshot = None
 
+    # Resolve against raw historical bars before reading calibration samples.
+    # Processing time is distinct from the OPEN-labelled analysis.as_of.
+    repository.resolve_live_model_observations(
+        symbol=analysis.symbol,
+        historical_bars=intraday,
+        current_as_of=datetime.now(timezone.utc),
+    )
     horizon_minutes = {
         "1 Hora": 60,
-        "6 Horas": 390,
+        "6 Horas": 360,
         "1 Día": 1_440,
         "1 Semana": 10_080,
         "1 Mes": 43_200,
-        "6 Meses": 181_440,
+        "6 Meses": 259_200,  # 180 calendar days, not 126 calendar days.
     }
+    from portfolio_tracker.services.scenario_calibration import (
+        make_scenario_contract, apply_scenario_calibration,
+    )
     raw_probability_up = analysis.probability_up
     raw_horizon_probabilities = {
-        horizon.label: horizon.probability_up
-        for horizon in analysis.horizon_projections
+        horizon.label: horizon.probability_up for horizon in analysis.horizon_projections
     }
+    scenario_contracts, calibration_results = {}, {}
     calibrated_horizons = []
+    calibration_cutoff = datetime.now(timezone.utc)
     for horizon in analysis.horizon_projections:
-        samples = repository.live_model_calibration_samples(
-            analysis.symbol,
-            horizon_minutes=horizon_minutes[horizon.label],
+        contract = make_scenario_contract(
+            analysis.symbol, horizon, horizon_minutes[horizon.label], calibrated_parameters,
         )
-        calibration = calibrate_probability(
-            horizon.probability_up / 100,
-            samples,
+        scenario_contracts[horizon.label] = contract
+        samples = repository.live_scenario_calibration_samples(
+            analysis.symbol, horizon_minutes=horizon_minutes[horizon.label],
+            model_id=contract["model_id"], as_of=calibration_cutoff,
         )
-        probability_range = horizon.probability_range
-        calibrated_up = min(
-            100.0 - probability_range,
-            calibration.calibrated_probability * 100,
-        )
-        calibrated_horizons.append(
-            replace(
-                horizon,
-                probability_up=round(calibrated_up, 1),
-                probability_down=round(100.0 - probability_range - calibrated_up, 1),
-                probability_status=calibration.status,
-                calibration_samples=calibration.sample_size,
-                brier_score=calibration.brier_score,
-            )
-        )
-    primary_calibration = calibrate_probability(
-        raw_probability_up / 100,
-        repository.live_model_calibration_samples(
-            analysis.symbol,
-            horizon_minutes=390,
-        ),
-    )
-    calibrated_probability_up = round(
-        primary_calibration.calibrated_probability * 100, 1
-    )
-    if primary_calibration.empirically_calibrated:
-        long_direction = analysis.execution_levels.direction == "LONG"
-        directional_probability = (
-            calibrated_probability_up
-            if long_direction
-            else 100.0 - calibrated_probability_up
-        )
-        operation_probability = (
-            min(analysis.operation_probability, directional_probability)
-            if analysis.risk_veto
-            else directional_probability
-        )
-    else:
-        operation_probability = analysis.operation_probability
+        calibration = calibrate_scenarios(contract["probabilities"], samples)
+        calibration_results[horizon.label] = calibration
+        calibrated_horizons.append(apply_scenario_calibration(horizon, calibration))
+    # The global operational score has a different target from the horizon
+    # distribution: do NOT borrow a 6-hour calibrator or complement UP as DOWN.
+    # Risk vetoes and position management remain independent and unchanged.
     analysis = replace(
-        analysis,
-        raw_probability_up=raw_probability_up,
-        probability_up=calibrated_probability_up,
-        probability_down=round(100.0 - calibrated_probability_up, 1),
-        operation_probability=round(operation_probability, 1),
+        analysis, raw_probability_up=raw_probability_up,
         horizon_projections=tuple(calibrated_horizons),
-        probability_status=primary_calibration.status,
-        calibration_samples=primary_calibration.sample_size,
-        calibration_brier_score=primary_calibration.brier_score,
+        probability_status="Score heurístico preliminar",
+        calibration_samples=0, calibration_brier_score=None,
     )
 
-    if live_mode:
-        repository.resolve_live_model_observations(
-            symbol=analysis.symbol,
-            current_price=Decimal(str(analysis.last_price)),
-            current_as_of=analysis.as_of,
-        )
+    from portfolio_tracker.services.operational_state import synchronize_position
+    try:
+        analysis = synchronize_position(repository.database, analysis)
+    except ValueError as exc:
+        st.error(f"Motor bloqueado por integridad del estado: {exc}")
+        return
+
+    emitted_at = datetime.now(timezone.utc)
+    source_closed_at = analysis.source_bar_closed_at
+    if live_mode and source_closed_at <= emitted_at < source_closed_at + timedelta(minutes=5):
         for horizon in analysis.horizon_projections:
             repository.record_live_model_observation(
                 symbol=analysis.symbol,
-                observed_at=analysis.as_of,
+                observed_at=emitted_at,
+                source_bar_at=source_closed_at,
                 reference_price=Decimal(str(analysis.last_price)),
                 raw_probability_up=Decimal(
                     str(raw_horizon_probabilities[horizon.label] / 100)
@@ -1607,6 +1637,8 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                     {
                         **calibrated_parameters,
                         "engine": horizon.engine_name,
+                        "feedback_version": 2,
+                        "scenario_contract": scenario_contracts[horizon.label],
                         "probability_status": horizon.probability_status,
                     },
                     sort_keys=True,
@@ -1615,7 +1647,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             )
     online_stats = repository.live_model_stats(analysis.symbol)
 
-    with st.container(border=True):
+    with st.expander("Estado de datos y calibración", expanded=False):
         with st.container(horizontal=True, vertical_alignment="center"):
             st.badge(
                 "Mercado EUA abierto · actualización cada 5 min"
@@ -1627,7 +1659,6 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             st.caption(
                 f"Realimentación resuelta: {online_stats['resolved']} observaciones · "
                 f"acierto {online_stats['accuracy']:.1%} · "
-                f"Brier {online_stats['brier_score']:.3f} · "
                 f"umbral adaptativo {online_stats['adaptive_threshold']:.1%}."
             )
             st.badge(
@@ -1642,16 +1673,52 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         if fundamental_warning:
             st.warning(fundamental_warning)
 
-    executive_pdf = build_executive_report(analysis)
-    technical_pdf = build_technical_report(analysis)
-    combined_pdf = build_probability_report(analysis)
+        st.caption(
+            "Escenarios de cierre al vencimiento: subida por encima del techo, rango entre límites "
+            "(inclusive), bajada bajo el piso. Brier multiclase OOS en [0,2]; no equivale al Brier binario. "
+            "El score operativo global permanece heurístico y no utiliza el calibrador de otro horizonte."
+        )
+        st.dataframe([
+            {"Horizonte": h.label, "Estado": h.probability_status,
+             "Entrenamiento": h.calibration_training_samples, "Calibración": h.calibration_fit_samples,
+             "Holdout": h.calibration_holdout_samples, "Purgadas": h.calibration_excluded,
+             "Brier OOS": h.brier_score, "Brier crudo OOS": h.raw_brier_score,
+             "Baseline OOS": h.baseline_brier_score}
+            for h in analysis.horizon_projections
+        ], hide_index=True)
+        reliability_rows = [
+            {"Horizonte": label, "Clase": class_name,
+             "Predicción media OOS": point.predicted_mean,
+             "Frecuencia observada OOS": point.observed_frequency,
+             "Muestras OOS": point.samples}
+            for label, result in calibration_results.items()
+            for class_name, curve in zip(("Subida", "Rango", "Bajada"), result.reliability_curves)
+            for point in curve
+        ]
+        if reliability_rows:
+            st.caption("Reliability curves: comparación por intervalos, exclusivamente en holdout.")
+            st.dataframe(reliability_rows, hide_index=True)
+
+    zone_snapshot = build_zone_snapshot(analysis)
+    try:
+        forward_log_status = log_snapshot(repository, analysis, zone_snapshot)
+        if forward_log_status["saved"]:
+            st.caption(f"Forward: {forward_log_status['saved']} zonas registradas para validación al cierre.")
+        if (forward_log_status.get("skipped", 0) or "cerrado" in forward_log_status["reason"]
+                or "vencidas" in forward_log_status["reason"]):
+            st.caption(forward_log_status["reason"])
+    except (ValueError, RuntimeError, OSError) as exc:
+        st.warning(f"No se guardó evidencia forward: {exc}")
+    executive_pdf = build_executive_report(analysis, zone_snapshot=zone_snapshot)
+    technical_pdf = build_technical_report(analysis, zone_snapshot=zone_snapshot)
+    combined_pdf = build_probability_report(analysis, zone_snapshot=zone_snapshot)
     calibration_context = {
         "backtest_run": repository.latest_backtest_run(),
         "online_stats": online_stats,
     }
-    master_pdf = build_master_report(analysis, calibration_context)
+    master_pdf = build_master_report(analysis, calibration_context, zone_snapshot=zone_snapshot)
     timestamp = analysis.as_of.strftime("%Y%m%d_%H%M")
-    with actions_slot.container(border=True):
+    with actions_slot.container(border=False):
         st.markdown("**Descargas del análisis actual**")
         with st.container(horizontal=True, horizontal_alignment="distribute"):
             st.download_button(
@@ -1695,15 +1762,20 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         with executive_tab:
             _render_probability_executive(
                 analysis,
+                zone_snapshot=zone_snapshot,
                 adaptive_probability_threshold=float(
                     online_stats["adaptive_threshold"]
                 ),
             )
-            _render_fundamental_news(analysis, fundamental_snapshot, compact=True)
+            with st.expander("Fundamentales y noticias", expanded=False):
+                _render_fundamental_news(analysis, fundamental_snapshot, compact=True)
     if technical_tab.open:
         with technical_tab:
+            render_price_zones(analysis, zone_snapshot=zone_snapshot)
             _render_fundamental_news(analysis, fundamental_snapshot, compact=False)
             signal_labels = {
+                TechnicalSignal.HOLD_LONG: "Posición LONG activa",
+                TechnicalSignal.HOLD_SHORT: "Posición SHORT activa",
                 TechnicalSignal.BUY: "Compra confirmada",
                 TechnicalSignal.SELL: "Venta confirmada",
                 TechnicalSignal.WATCH_BUY: "Vigilar compra",
@@ -1711,6 +1783,8 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                 TechnicalSignal.NEUTRAL: "Sin señal",
             }
             signal_colors = {
+                TechnicalSignal.HOLD_LONG: "gray",
+                TechnicalSignal.HOLD_SHORT: "gray",
                 TechnicalSignal.BUY: "green",
                 TechnicalSignal.SELL: "red",
                 TechnicalSignal.WATCH_BUY: "blue",
@@ -2412,7 +2486,8 @@ def backtesting_page(
             help="Incluye automáticamente las posiciones registradas en el libro local.",
         )
         first, second, third = st.columns(3)
-        period = first.selectbox("Histórico diario", ["5y", "10y", "max"], index=1)
+        period = first.selectbox("Datos del replay", ["5m: 1 mes / diario: 5 años"])
+        st.caption("Las señales se reproducen con velas reales de 5m. Los 5 años diarios solo aportan contexto; no amplían la muestra intradía. Sin evidencia OOS suficiente no se promoverán parámetros.")
         training_pct = second.slider(
             "Entrenamiento", min_value=55, max_value=85, value=70, step=5,
             help="El resto del histórico se reserva cronológicamente para validación OOS.",
@@ -2424,7 +2499,7 @@ def backtesting_page(
         )
         first, second, third = st.columns(3)
         stop_multiple = first.slider("Stop ATR de referencia", 2.0, 2.5, 2.25, 0.05)
-        reward_risk = second.slider("Objetivo riesgo/beneficio", 1.5, 3.0, 2.0, 0.25)
+        reward_risk = second.slider("R:R mínimo de TP1", 1.5, 3.0, 2.0, 0.25)
         holding_sessions = third.number_input(
             "Máximo de sesiones", min_value=2, max_value=30, value=10, step=1
         )
@@ -2463,6 +2538,7 @@ def backtesting_page(
                 training_fraction=training_pct / 100,
                 stop_atr_multiple=stop_multiple,
                 reward_risk=reward_risk,
+                minimum_reward_risk=reward_risk,
                 holding_sessions=int(holding_sessions),
                 risk_per_trade_pct=risk_pct,
                 commission_bps_per_side=commission_bps,
@@ -2752,7 +2828,7 @@ def settings_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> 
         """)
 
 
-repository = get_repository()
+repository = get_repository(schema_revision=9)
 fx_quote, fx_error = current_fx(repository)
 
 

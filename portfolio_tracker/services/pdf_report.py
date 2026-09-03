@@ -8,6 +8,8 @@ import hashlib
 from io import BytesIO
 import json
 from typing import TYPE_CHECKING
+from xml.sax.saxutils import escape
+from portfolio_tracker.services.price_zones import build_zone_snapshot, distance_to_zone
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -54,6 +56,11 @@ class ExecutiveDecision:
 def executive_decision(analysis: "ProbabilityAnalysis") -> ExecutiveDecision:
     """Traduce la confluencia a una decisión concreta y prudencial."""
 
+    if analysis.position_state != "FLAT":
+        return ExecutiveDecision(
+            "REVISAR SALIDA · POSICIÓN ABIERTA" if analysis.position_state == "EXIT_PENDING" else "GESTIONAR POSICIÓN · " + analysis.execution_levels.direction,
+            "warning", analysis.position_management,
+        )
     if analysis.stoch_overbought_extreme:
         return ExecutiveDecision(
             "ESPERAR CORRECCIÓN",
@@ -228,6 +235,7 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
     )
     decision_box.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), decision_color), ("BOX", (0, 0), (-1, -1), 0, decision_color), ("TOPPADDING", (0, 0), (-1, 0), 10), ("BOTTOMPADDING", (0, -1), (-1, -1), 10), ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12)]))
     story.extend([decision_box, Spacer(1, 10), Paragraph("Resumen ejecutivo", styles["Section"])])
+    story.append(Paragraph(_safe_text(f"Estado: {analysis.position_state}. Régimen mayor: {analysis.macro_permission}. {analysis.hierarchy_detail}"), styles["BodySmall"]))
     summary_rows = [
         [
             "Último precio",
@@ -244,6 +252,9 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
             f"{analysis.operation_probability:.1f}/100" if analysis.operation_probability else "Detonante pendiente",
         ],
     ]
+    summary_header = ParagraphStyle('SummaryHeader', parent=styles['BodySmall'],
+                                    textColor=colors.white, fontName='Helvetica-Bold')
+    summary_rows[0] = [Paragraph(escape(value), summary_header) for value in summary_rows[0]]
     story.extend([
         _table(summary_rows, [34.8 * mm] * 5),
         Spacer(1, 5),
@@ -272,7 +283,7 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
             styles["BodySmall"],
         )
     )
-    if analysis.execution_plan_conditional:
+    if analysis.execution_plan_conditional and analysis.position_state == "FLAT":
         story.append(
             Paragraph(
                 "Niveles informativos: no constituyen una orden activa hasta que desaparezca el bloqueo y exista un gatillo confirmado.",
@@ -382,6 +393,7 @@ def _technical_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
     decision = executive_decision(analysis)
     levels = analysis.execution_levels
     story.append(Paragraph("Graficas tecnicas reales", styles["Section"]))
+    story.append(Paragraph(_safe_text(f"Estado: {analysis.position_state}. {decision.label}. Régimen mayor: {analysis.macro_permission}. {analysis.hierarchy_detail}"), styles["BodySmall"]))
     current_section = ""
     for chart in build_technical_pdf_charts(analysis, width=174 * mm):
         if chart.section != current_section:
@@ -568,11 +580,11 @@ def _calibration_story(
             Paragraph("Realimentación progresiva", styles["ChartTitle"]),
             _table(
                 [
-                    ["Observaciones resueltas", "Acierto", "Error Brier", "Umbral adaptativo"],
+                    ["Observaciones resueltas", "Acierto", "Brier binario OOS", "Umbral adaptativo"],
                     [
                         int(online.get("resolved", 0) or 0),
                         f"{float(online.get('accuracy', 0) or 0):.1%}",
-                        f"{float(online.get('brier_score', 0.25) or 0):.3f}",
+                        (f"{float(online['brier_score']):.3f}" if online.get('brier_score') is not None else "N/D"),
                         f"{float(online.get('adaptive_threshold', 0.55) or 0):.1%}",
                     ],
                 ],
@@ -681,6 +693,51 @@ def _calibration_story(
     return story
 
 
+def _zone_story(analysis, snapshot, styles):
+    """Shared six-level snapshot, once per PDF (including combined/master)."""
+    paragraph = lambda value: Paragraph(escape(_safe_text(value)), styles['BodySmall'])
+    story = [Paragraph('Alcance intradía de las zonas', styles['Section']),
+             paragraph(f'Evaluado: {snapshot.evaluated_at.isoformat()} | Precio de referencia: ${analysis.last_price:,.2f} USD'),
+             paragraph('Horizonte: desde el último cierre de 5 minutos hasta el cierre de la sesión actual. '
+                       'Frecuencia histórica estimada, no calibrada OOS; no garantiza ejecución ni rentabilidad.')]
+    for heading, zones, estimates in (
+        ('Zona de compra / Entrada ideal', snapshot.buys, snapshot.estimates[:3]),
+        ('Zona de venta / Objetivos y resistencia', snapshot.sales, snapshot.estimates[3:]),
+    ):
+        rows = []
+        for zone, estimate in zip(zones, estimates):
+            level = ('N/D' if zone.low is None else f'${zone.low:,.2f}' if zone.low == zone.high
+                     else f'${zone.low:,.2f} - ${zone.high:,.2f}')
+            distance = distance_to_zone(analysis.last_price, zone)
+            proximity = ('Distancia N/D' if distance is None else
+                         f'Distancia {distance[0]:+,.2f} USD ({distance[1]:+.2f}%)')
+            probability = ('Probabilidad estimada de alcance hoy: N/D' if estimate.probability is None
+                           else f'Probabilidad estimada de alcance hoy: {estimate.probability:.0f}%')
+            interval = (f'IC 95%: {estimate.lower:.0f}-{estimate.upper:.0f}%' if estimate.lower is not None else 'IC 95%: N/D')
+            readings = [paragraph(probability), paragraph(f'{interval} | {estimate.samples} sesiones')]
+            if estimate.model.startswith('conditional-'):
+                direction = 'debajo' if estimate.close_direction == 'BELOW' else 'encima'
+                value = 'N/D' if estimate.close_probability is None else f'{estimate.close_probability:.0f}%'
+                readings[0] = paragraph(probability + ' (toque / wick)')
+                readings.append(paragraph(f'Cierre final {direction}: {value}'))
+                if estimate.close_lower is not None:
+                    readings.append(paragraph(f'IC 95% cierre: {estimate.close_lower:.0f}-{estimate.close_upper:.0f}%'))
+            if estimate.effective_samples is not None:
+                readings.append(paragraph(f'Muestra efectiva: {estimate.effective_samples:.1f} sesiones'))
+            readings.extend([paragraph(estimate.status), paragraph(proximity)])
+            rows.append([[paragraph(zone.label), paragraph(level), paragraph(zone.source)], readings])
+        story.append(KeepTogether([Paragraph(heading, styles['Section']),
+                                   _table(rows, [65 * mm, 109 * mm], header=False)]))
+    story.append(paragraph('0% significa que no se observó alcance en la muestra, no imposibilidad. '
+                           'El IC refleja incertidumbre muestral, no todos los errores del modelo.'))
+    if snapshot.estimates and snapshot.estimates[0].model.startswith('conditional-'):
+        story.append(paragraph(snapshot.estimates[0].detail))
+        story.append(paragraph('Contexto S/D, ADX y EMA50 con información previa a cada sesión; '
+                               'ajuste por ATR consumido y tiempo restante. Cierre más allá de la frontera exterior '
+                               'de la zona, no cierre de vela de 5 minutos.'))
+    return story
+
+
 def _build_report(
     analysis: "ProbabilityAnalysis",
     *,
@@ -690,11 +747,15 @@ def _build_report(
     calibration_context: Mapping[str, object] | None = None,
     title: str,
     subject: str,
+    zone_snapshot=None,
 ) -> bytes:
     buffer = BytesIO()
     document = _document(buffer, analysis, title, subject)
     styles = _report_styles()
     story = _report_header(analysis, title, styles)
+    snapshot = zone_snapshot if zone_snapshot is not None else build_zone_snapshot(analysis)
+    story.extend(_zone_story(analysis, snapshot, styles))
+    story.append(PageBreak())
     if include_executive:
         story.extend(_executive_story(analysis, styles))
     if include_technical:
@@ -709,7 +770,7 @@ def _build_report(
     return buffer.getvalue()
 
 
-def build_executive_report(analysis: "ProbabilityAnalysis") -> bytes:
+def build_executive_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None) -> bytes:
     """Genera exclusivamente la vista ejecutiva y su proyeccion diaria."""
 
     return _build_report(
@@ -717,11 +778,12 @@ def build_executive_report(analysis: "ProbabilityAnalysis") -> bytes:
         include_executive=True,
         include_technical=False,
         title="Vista ejecutiva",
+        zone_snapshot=zone_snapshot,
         subject="Decision, horizontes, niveles de riesgo y proyeccion de 15 sesiones",
     )
 
 
-def build_technical_report(analysis: "ProbabilityAnalysis") -> bytes:
+def build_technical_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None) -> bytes:
     """Genera exclusivamente graficas, indicadores y lectura tecnica completa."""
 
     return _build_report(
@@ -729,11 +791,12 @@ def build_technical_report(analysis: "ProbabilityAnalysis") -> bytes:
         include_executive=False,
         include_technical=True,
         title="Vista tecnica avanzada",
+        zone_snapshot=zone_snapshot,
         subject="Panel tecnico multi-temporal completo para auditoria",
     )
 
 
-def build_probability_report(analysis: "ProbabilityAnalysis") -> bytes:
+def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None) -> bytes:
     """Genera el reporte unificado con la vista ejecutiva y la tecnica."""
 
     return _build_report(
@@ -741,6 +804,7 @@ def build_probability_report(analysis: "ProbabilityAnalysis") -> bytes:
         include_executive=True,
         include_technical=True,
         title="Reporte cuantitativo completo",
+        zone_snapshot=zone_snapshot,
         subject="Resumen ejecutivo y tecnico para revision humana o por IA",
     )
 
@@ -748,6 +812,7 @@ def build_probability_report(analysis: "ProbabilityAnalysis") -> bytes:
 def build_master_report(
     analysis: "ProbabilityAnalysis",
     calibration_context: Mapping[str, object] | None,
+    *, zone_snapshot=None,
 ) -> bytes:
     """Genera las tres vistas: ejecutiva, técnica y calibración auditada."""
 
@@ -758,5 +823,6 @@ def build_master_report(
         include_calibration=True,
         calibration_context=calibration_context,
         title="Reporte maestro cuantitativo",
+        zone_snapshot=zone_snapshot,
         subject="Vista ejecutiva, tecnica avanzada y calibracion fuera de muestra",
     )

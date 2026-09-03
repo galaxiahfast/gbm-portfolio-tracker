@@ -7,6 +7,7 @@ import re
 import pandas as pd
 
 from portfolio_tracker.config import DATA_DIR
+from portfolio_tracker.analytics.closed_bars import select_last_closed_bar
 
 
 SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.\-]{0,14}$")
@@ -89,8 +90,8 @@ def download_quant_frames(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         ) from exc
 
     return (
-        _normalize_frame(intraday, normalized_symbol),
-        _normalize_frame(daily, normalized_symbol),
+        select_last_closed_bar(_normalize_frame(intraday, normalized_symbol), "5m"),
+        select_last_closed_bar(_normalize_frame(daily, normalized_symbol), "1d"),
     )
 
 

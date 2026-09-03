@@ -34,7 +34,9 @@ def test_no_open_attribute_is_called_on_tabs_tuple() -> None:
 
 def test_predictor_tabs_are_dynamic_and_guard_individual_containers() -> None:
     source = APP_PATH.read_text(encoding="utf-8")
-    assert "executive_tab, technical_tab, calibration_tab = st.tabs(" in source
+    assert "executive_tab, technical_tab, calibration_tab, validation_tab = st.tabs(" in source
+    assert '"VALIDACIÓN"' in source
+    assert "if validation_tab.open:" in source
     assert 'on_change="rerun"' in source
     assert "if executive_tab.open:" in source
     assert "with executive_tab:" in source
@@ -44,8 +46,8 @@ def test_predictor_tabs_are_dynamic_and_guard_individual_containers() -> None:
     assert "with calibration_tab:" in source
     assert "backtesting_page(repository, fx_quote, embedded=True)" in source
     assert source.count("st.download_button(") == 4
-    assert source.index("actions_slot = st.container()") < source.index(
-        "executive_tab, technical_tab, calibration_tab = st.tabs("
+    assert source.index('actions_slot = st.container(key="quant_actions")') < source.index(
+        "executive_tab, technical_tab, calibration_tab, validation_tab = st.tabs("
     )
     assert "Descargar PDF maestro" in source
 

@@ -518,6 +518,171 @@ section[data-testid="stSidebar"] div[style*="cursor: col-resize"] > div {
     transition-duration: .01ms !important;
   }
 }
+/* Fase 5: presentation-only, scoped to this page by its download slot.
+   No broad alert hiding: failures and the decision rationale remain visible. */
+[data-testid="stMain"]:has(.st-key-quant_actions) {
+  --ui-radius: 4px;
+  --ui-gap: 8px;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) .st-key-page_header {
+  padding: 0 0 .5rem;
+  margin: 0;
+  border: 0;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) .st-key-page_header h1 {
+  font-size: clamp(1.4rem, 2.4vw, 1.85rem);
+  line-height: 1.25;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) .st-key-page_header [data-testid="stCaptionContainer"],
+[data-testid="stMain"]:has(.st-key-quant_actions) .st-key-page_header [data-testid="stMarkdown"],
+.st-key-quant_disclosure_duplicate,
+.st-key-quant_hierarchy_duplicate,
+.st-key-quant_actions [data-testid="stMarkdown"],
+.st-key-quant_actions [data-testid="stCaptionContainer"] {
+  display: none !important;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stVerticalBlock"] {
+  gap: .65rem;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stMetric"] {
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  background: #111111 !important;
+  border-color: #292929 !important;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stMetric"] {
+  padding: .6rem .75rem !important;
+  min-height: 0 !important;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stMetricValue"] {
+  font-size: clamp(1.05rem, 1.65vw, 1.4rem) !important;
+  line-height: 1.3 !important;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stMetricLabel"] {
+  color: #a0a0a0 !important;
+  font-size: .78rem !important;
+}
+
+.st-key-quant_core_metrics { gap: .5rem !important; }
+.st-key-quant_core_metrics > div { flex-basis: 155px; min-width: 0; }
+
+.st-key-quant_buy_zone,
+.st-key-quant_sell_zone {
+  padding: .8rem !important;
+  border: 1px solid #292929 !important;
+  border-radius: 4px !important;
+  background: #111111 !important;
+  height: 100%;
+}
+
+.st-key-quant_buy_zone [data-testid="stMetric"],
+.st-key-quant_sell_zone [data-testid="stMetric"] {
+  padding: .2rem 0 !important;
+  border: 0 !important;
+}
+
+.st-key-quant_decision [data-testid="stAlert"] {
+  padding: .6rem .75rem !important;
+  background: #111111 !important;
+  border: 1px solid #333333 !important;
+  border-left: 2px solid #c0c0c0 !important;
+  border-radius: 4px !important;
+}
+
+.st-key-quant_decision h3 { font-size: 1rem !important; padding: 0 !important; }
+/* Levels and status below the rationale duplicate the dedicated cards. */
+.st-key-quant_decision [data-testid="stMarkdownContainer"] > p:last-child {
+  display: none;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stAlert"],
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stBadge"],
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stMetricDelta"],
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stPlotlyChart"],
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stDataFrame"] {
+  filter: grayscale(1);
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) [data-testid="stExpander"] {
+  border-color: #292929 !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+}
+
+[data-testid="stMain"]:has(.st-key-quant_actions) h2 {
+  font-size: 1.05rem !important;
+  padding-block: .5rem !important;
+}
+
+.st-key-quant_actions button {
+  min-height: 2.1rem;
+  box-shadow: none !important;
+  background: #111111 !important;
+  border: 1px solid #333333 !important;
+  color: #ffffff !important;
+}
+.st-key-quant_actions button:hover { background: #222222 !important; }
+.st-key-quant_actions button:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+/* Executive-only removals requested by the user. Computation remains intact. */
+.st-key-quant_decision,
+.st-key-quant_hidden_score,
+.st-key-quant_hidden_activation,
+.st-key-quant_hidden_execution {
+  display: none !important;
+}
+
+.st-key-quant_zone_lists [data-testid="stProgress"] { filter: grayscale(1); }
+.st-key-quant_zone_lists [data-testid="stProgress"] [role="progressbar"] {
+  accent-color: #dddddd;
+}
+.st-key-quant_zone_lists [data-testid="stMarkdownContainer"] p {
+  font-size: .92rem;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+.st-key-quant_zone_lists [data-testid="stCaptionContainer"] {
+  color: #a0a0a0;
+  font-size: .76rem;
+}
+/* Three identical presentation columns; the legacy metrics still compute. */
+.st-key-quant_core_metrics,
+.st-key-quant_legacy_zones {
+  display: none !important;
+}
+
+.st-key-quant_three_panels {
+  --quant-panel-font-size: .875rem;
+  --quant-panel-font-weight: 500;
+  font-family: inherit;
+}
+.st-key-quant_three_panels [data-testid="stColumn"] {
+  background: #111111 !important;
+  border: 1px solid #292929 !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  padding: .85rem !important;
+}
+.st-key-quant_three_panels [data-testid="stMarkdownContainer"],
+.st-key-quant_three_panels [data-testid="stMarkdownContainer"] p,
+.st-key-quant_three_panels [data-testid="stMarkdownContainer"] strong,
+.st-key-quant_three_panels [data-testid="stCaptionContainer"],
+.st-key-quant_three_panels [data-testid="stCaptionContainer"] p {
+  font-family: inherit !important;
+  font-size: var(--quant-panel-font-size) !important;
+  font-weight: var(--quant-panel-font-weight) !important;
+  line-height: 1.5 !important;
+  font-variant-numeric: tabular-nums;
+}
 </style>
 """
 

@@ -25,7 +25,7 @@ from portfolio_tracker.config import DATA_DIR
 from portfolio_tracker.services.quant_market_data import QuantMarketDataError, normalize_symbol
 
 
-SNAPSHOT_VERSION = "fundamental-news-v2"
+SNAPSHOT_VERSION = "fundamental-news-v3-period-aligned"
 SUPPORTED_PRIMARY_SYMBOLS = ("TSLA", "NVDA", "SMCI", "GME")
 
 POSITIVE_TERMS = {
@@ -132,25 +132,116 @@ def snapshot_from_payload(payload_json: str) -> FundamentalNewsSnapshot:
 
 
 def _finite(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if math.isfinite(number) else None
 
 
-def _statement_value(frame: pd.DataFrame | None, aliases: Sequence[str]) -> float | None:
+def _latest_statement_cell(
+    frame: pd.DataFrame | None, aliases: Sequence[str],
+) -> tuple[float | None, str]:
+    """Read the latest dated column, never an older non-null cell or an ambiguous row."""
     if frame is None or frame.empty:
-        return None
-    normalized = {re.sub(r"[^a-z0-9]", "", str(index).lower()): index for index in frame.index}
+        return None, ""
+    dates = [_period_date(column) for column in frame.columns]
+    if not all(dates) or len(set(dates)) != len(dates):
+        return None, ""
+    latest = max(dates)
+    column = dates.index(latest)
+    normalized = [re.sub(r"[^a-z0-9]", "", str(index).lower()) for index in frame.index]
     for alias in aliases:
         key = re.sub(r"[^a-z0-9]", "", alias.lower())
         if key not in normalized:
             continue
-        values = pd.to_numeric(frame.loc[normalized[key]], errors="coerce").dropna()
-        if not values.empty:
-            return _finite(values.iloc[0])
-    return None
+        if normalized.count(key) != 1:
+            return None, latest
+        return _finite(frame.iloc[normalized.index(key), column]), latest
+    return None, latest
+
+
+def _statement_value(frame: pd.DataFrame | None, aliases: Sequence[str]) -> float | None:
+    return _latest_statement_cell(frame, aliases)[0]
+
+
+def _period_date(value: object) -> str:
+    # Numeric labels are not reporting dates (pandas would interpret them as nanoseconds).
+    if value is None or isinstance(value, (int, float, bool)):
+        return ""
+    try:
+        date = pd.Timestamp(value)
+        return "" if pd.isna(date) else date.date().isoformat()
+    except (ValueError, TypeError, OverflowError):
+        return ""
+
+
+@dataclass(frozen=True, slots=True)
+class _FinancialFact:
+    value: float | None
+    period: str
+    end: str
+    start: str
+    currency: str
+    valid_units: bool
+    source: str
+
+
+def _financial_fact(value: object, metadata: Mapping[str, object], source: str) -> _FinancialFact:
+    """Normalize explicitly declared monetary scales, without assuming dollars or TTM."""
+    amount = _finite(value)
+    scale = _finite(metadata.get("scale"))
+    currency = str(metadata.get("currency") or "").strip().upper()
+    valid_units = bool(
+        metadata.get("unit") == "currency" and re.fullmatch(r"[A-Z]{3}", currency)
+        and scale is not None and scale > 0
+    )
+    normalized = _finite(amount * scale) if amount is not None and valid_units else None
+    return _FinancialFact(
+        normalized, str(metadata.get("period") or "").upper(),
+        _period_date(metadata.get("period_end")), _period_date(metadata.get("period_start")),
+        currency, valid_units, source,
+    )
+
+
+def _statement_fact(frame: pd.DataFrame | None, aliases: Sequence[str]) -> _FinancialFact:
+    value, end = _latest_statement_cell(frame, aliases)
+    metadata = dict(frame.attrs) if frame is not None else {}
+    # The selected column, not a global date hint, identifies the reporting period.
+    metadata["period_end"] = end
+    return _financial_fact(value, metadata, "statement:" + aliases[0])
+
+
+def _aligned_ratio(
+    numerator: _FinancialFact, denominator: _FinancialFact, *, expense: bool = False,
+) -> tuple[float | None, str]:
+    if not numerator.valid_units or not denominator.valid_units:
+        return None, "Moneda/unidad/escala no verificadas."
+    if numerator.value is None or denominator.value is None:
+        return None, "Dato ausente o no finito en el último periodo; no se reutilizan celdas antiguas."
+    if numerator.period not in {"QUARTER", "TTM"} or numerator.period != denominator.period:
+        return None, "Periodos incompatibles o no verificados (se exige QUARTER/QUARTER o TTM/TTM)."
+    if not numerator.end or numerator.end != denominator.end or numerator.start != denominator.start:
+        return None, "Fechas de periodo incompatibles o no verificadas."
+    if numerator.start and numerator.start >= numerator.end:
+        return None, "Intervalo de periodo inválido."
+    if numerator.currency != denominator.currency:
+        return None, "Monedas incompatibles; no se aplica conversión implícita."
+    # Interest expenses may be reported with a negative accounting sign. Revenue
+    # and net income must be strictly positive; loss/loss is not cash conversion.
+    divisor = abs(denominator.value) if expense else denominator.value
+    if divisor <= 0:
+        return None, "Denominador cero o negativo; cociente no interpretable para bonificaciones."
+    ratio = _finite(numerator.value / divisor)
+    if ratio is None:
+        return None, "Cociente no finito."
+    basis = (
+        f"{numerator.period} al {numerator.end}; {numerator.currency}; unidad monetaria base; "
+        f"{numerator.source} / {denominator.source}"
+    )
+    return ratio, basis
 
 
 def _first_number(info: Mapping[str, object], *keys: str) -> float | None:
@@ -275,7 +366,15 @@ def build_fundamental_snapshot(
     raw_news: Sequence[Mapping[str, object]] | None = None,
     observed_at: datetime | None = None,
     provider: str = "Yahoo Finance / yfinance",
+    financial_metadata: Mapping[str, Mapping[str, object]] | None = None,
 ) -> FundamentalNewsSnapshot:
+    """Build an analytical snapshot, leaving accounting and stored snapshots untouched.
+
+    Statement attrs must declare period (QUARTER/TTM), currency, unit='currency'
+    and scale. Optional per-info-field financial_metadata uses the same contract
+    plus period_end (and period_start when known). Unverified info flows are
+    display-only inputs to ratios, never paired with quarterly denominators.
+    """
     observed = (observed_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     normalized_symbol = normalize_symbol(symbol)
     source = dict(info or {})
@@ -292,35 +391,59 @@ def build_fundamental_snapshot(
         cashflow,
         ("Capital Expenditure", "Capital Expenditures"),
     )
-    quarterly_ebit = _statement_value(income_statement, ("EBIT", "Operating Income"))
-    quarterly_interest = _statement_value(
-        income_statement,
-        ("Interest Expense", "Interest Expense Non Operating"),
-    )
-    operating_cash = _first_number(source, "operatingCashflow") or quarterly_operating_cash
+    operating_cash = _first_number(source, "operatingCashflow")
+    if operating_cash is None:
+        operating_cash = quarterly_operating_cash
     total_cash = _first_number(source, "totalCash")
-    total_debt = _first_number(source, "totalDebt") or quarterly_debt
-    cash_conversion = (
-        operating_cash / quarterly_net_income
-        if operating_cash is not None and quarterly_net_income not in (None, 0)
-        else None
-    )
-    fcf_value = _first_number(source, "freeCashflow") or quarterly_fcf
-    fcf_margin = (
-        fcf_value / quarterly_revenue
-        if fcf_value is not None and quarterly_revenue not in (None, 0)
-        else None
-    )
+    source_debt = _first_number(source, "totalDebt")
+    total_debt = source_debt if source_debt is not None else quarterly_debt
+    fcf_value = _first_number(source, "freeCashflow")
+    if fcf_value is None:
+        fcf_value = quarterly_fcf
     net_debt = (
-        total_debt - total_cash
-        if total_debt is not None and total_cash is not None
+        source_debt - total_cash
+        if source_debt is not None and total_cash is not None
         else None
     )
-    interest_coverage = (
-        quarterly_ebit / abs(quarterly_interest)
-        if quarterly_ebit is not None and quarterly_interest not in (None, 0)
-        else None
+    metadata = financial_metadata or {}
+    ratio_audit: dict[str, float | str | None] = {}
+    reasons: list[str] = []
+
+    def cash_ratio(
+        name: str, numerator_key: str, denominator_key: str,
+        numerator_aliases: Sequence[str], denominator_aliases: Sequence[str],
+    ) -> float | None:
+        # Explicitly supplied info provenance opts into that pair. If invalid,
+        # fail closed; do not silently switch periods to obtain a better score.
+        if numerator_key in metadata or denominator_key in metadata:
+            numerator = _financial_fact(source.get(numerator_key), metadata.get(numerator_key, {}), "info:" + numerator_key)
+            denominator = _financial_fact(source.get(denominator_key), metadata.get(denominator_key, {}), "info:" + denominator_key)
+        else:
+            numerator = _statement_fact(cashflow, numerator_aliases)
+            denominator = _statement_fact(income_statement, denominator_aliases)
+        result, basis = _aligned_ratio(numerator, denominator)
+        ratio_audit[name + "_basis"] = basis
+        ratio_audit[name + "_numerator"] = numerator.value
+        ratio_audit[name + "_denominator"] = denominator.value
+        reasons.append(f"{name}: {'N/D; ' if result is None else ''}{basis}")
+        return result
+
+    cash_conversion = cash_ratio(
+        "cash_conversion", "operatingCashflow", "netIncomeToCommon",
+        ("Operating Cash Flow", "Total Cash From Operating Activities"),
+        ("Net Income", "Net Income Common Stockholders"),
     )
+    fcf_margin = cash_ratio(
+        "fcf_margin", "freeCashflow", "totalRevenue",
+        ("Free Cash Flow",), ("Total Revenue", "Operating Revenue"),
+    )
+    interest_coverage, interest_basis = _aligned_ratio(
+        _statement_fact(income_statement, ("EBIT", "Operating Income")),
+        _statement_fact(income_statement, ("Interest Expense", "Interest Expense Non Operating")),
+        expense=True,
+    )
+    ratio_audit["interest_coverage_basis"] = interest_basis
+    reasons.append(f"interest_coverage: {'N/D; ' if interest_coverage is None else ''}{interest_basis}")
     metrics: dict[str, float | str | None] = {
         "sector": str(source.get("sector") or ""),
         "industry": str(source.get("industry") or ""),
@@ -346,9 +469,9 @@ def build_fundamental_snapshot(
         "quarterly_revenue": quarterly_revenue,
         "quarterly_net_income": quarterly_net_income,
         "quarterly_equity": quarterly_equity,
+        **ratio_audit,
     }
 
-    reasons: list[str] = []
     fundamental = 0.0
     margin = _finite(metrics["profit_margin"])
     growth = _finite(metrics["revenue_growth"])
@@ -368,11 +491,15 @@ def build_fundamental_snapshot(
         fundamental += impact
         reasons.append(f"Crecimiento de beneficios {earnings_growth:.1%}: {impact:+.1f} pp.")
     if free_cash_flow is not None:
-        impact = 1.5 if free_cash_flow > 0 else -2.0
+        impact = 1.5 if free_cash_flow > 0 else -2.0 if free_cash_flow < 0 else 0.0
         fundamental += impact
-        reasons.append(f"Flujo de caja libre {'positivo' if free_cash_flow > 0 else 'negativo'}: {impact:+.1f} pp.")
+        sign = "positivo" if free_cash_flow > 0 else "negativo" if free_cash_flow < 0 else "nulo"
+        reasons.append(f"Flujo de caja libre {sign}: {impact:+.1f} pp.")
     if debt_to_equity is not None:
-        impact = 1.0 if debt_to_equity < 100 else -2.0 if debt_to_equity > 250 else 0.0
+        impact = (
+            -2.0 if debt_to_equity < 0 or (quarterly_equity is not None and quarterly_equity < 0)
+            else 1.0 if debt_to_equity < 100 else -2.0 if debt_to_equity > 250 else 0.0
+        )
         fundamental += impact
         reasons.append(f"Deuda/capital {debt_to_equity:.1f}: {impact:+.1f} pp.")
     if cash_conversion is not None:
@@ -464,7 +591,10 @@ def build_fundamental_snapshot(
     )
     risk_veto = veto_scope != "NONE"
     label = "Favorable" if total >= 3 else "Adverso" if total <= -3 else "Neutral"
-    if not any(value is not None and value != "" for value in metrics.values()) and not news:
+    if not any(
+        value is not None and value != ""
+        for key, value in metrics.items() if key not in ratio_audit
+    ) and not news:
         reasons.append("La fuente no entregó métricas ni noticias utilizables; ponderación neutral.")
     return FundamentalNewsSnapshot(
         symbol=normalized_symbol, observed_at=observed.isoformat(), provider=provider,
@@ -511,6 +641,19 @@ def download_fundamental_news(symbol: str) -> FundamentalNewsSnapshot:
         raise QuantMarketDataError(
             f"No fue posible actualizar fundamentales/noticias de {normalized_symbol}."
         )
+    # These properties explicitly request quarterly statements; Yahoo raw values
+    # are monetary units, not the displayed thousands/millions. Do not substitute
+    # the security's trading currency for the company's financial currency.
+    currency = info.get("financialCurrency") if isinstance(info, Mapping) else None
+    annotated = []
+    for frame in (income, balance, cashflow):
+        copied = frame.copy(deep=False)
+        copied.attrs = {
+            **frame.attrs, "period": "QUARTER", "currency": currency,
+            "unit": "currency", "scale": 1,
+        }
+        annotated.append(copied)
+    income, balance, cashflow = annotated
     return build_fundamental_snapshot(
         normalized_symbol, info=info, income_statement=income,
         balance_sheet=balance, cashflow=cashflow, calendar=calendar,

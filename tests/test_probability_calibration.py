@@ -17,23 +17,25 @@ def test_small_sample_remains_explicitly_heuristic() -> None:
 
 
 def test_large_sample_uses_monotonic_empirical_reliability_curve() -> None:
-    samples = (
-        [(0.30, 1 if index < 100 else 0) for index in range(250)]
-        + [(0.70, 1 if index < 200 else 0) for index in range(250)]
-    )
+    # Chronological 300 train / 100 calibration / 100 independent holdout.
+    samples = [(0.30, 0), (0.70, 1)] * 250
     result = calibrate_probability(0.70, samples)
 
     assert result.empirically_calibrated
     assert result.sample_size == 500
-    assert 0.70 < result.calibrated_probability < 0.85
+    expected_high = (50 + 4) / (50 + 8)  # Fit uses only 50 calibration positives.
+    assert math.isclose(result.calibrated_probability, expected_high)
+    assert (result.training_samples, result.calibration_samples, result.holdout_samples) == (300,100,100)
     assert all(
         left.observed_frequency <= right.observed_frequency
-        for left, right in zip(result.reliability_curve, result.reliability_curve[1:])
+        for left, right in zip(result.isotonic_curve, result.isotonic_curve[1:])
     )
     assert math.isclose(
         result.brier_score or 0,
-        sum((probability - outcome) ** 2 for probability, outcome in samples) / 500,
+        (1-expected_high)**2,
     )
+    assert math.isclose(result.raw_brier_score, 0.09)
+    assert not math.isclose(result.brier_score, sum((p-y)**2 for p,y in samples)/500)
 
 
 def test_reliability_curve_rejects_invalid_bin_count() -> None:

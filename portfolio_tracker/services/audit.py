@@ -95,6 +95,12 @@ class PortfolioAuditor:
         self._check_backtests(findings)
         self._check_live_model(findings)
         self._check_fundamental_news(findings)
+        from portfolio_tracker.services.operational_state import audit_operational_history
+        try:
+            audit_operational_history(self.repository.database)
+            findings.append(AuditFinding("Estado operativo", AuditLevel.PASS, "Cadena SHA-256 operativa verificada."))
+        except ValueError as exc:
+            findings.append(AuditFinding("Estado operativo", AuditLevel.ERROR, str(exc)))
         return AuditReport(datetime.now(timezone.utc), tuple(findings))
 
     def _check_database(self, findings: list[AuditFinding]) -> None:
@@ -425,7 +431,7 @@ class PortfolioAuditor:
                 AuditFinding(
                     "Calibración continua",
                     AuditLevel.ERROR,
-                    "La huella de una observación del modelo no coincide.",
+                    "Observaciones no verificables: legado sin firma de resolución o datos alterados. Excluidas de calibración.",
                     "observaciones " + ", ".join(f"#{item}" for item in invalid_ids),
                 )
             )

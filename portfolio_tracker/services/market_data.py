@@ -17,6 +17,12 @@ class MarketDataError(RuntimeError):
     pass
 
 
+def download_daily_history(symbol="SMCI", **kwargs):
+    """Diarios cacheados desde 2024 para contexto auditable del forward."""
+    from .forward_market import download_daily_history as download
+    return download(symbol, **kwargs)
+
+
 class FxProvider(ABC):
     @abstractmethod
     def usd_mxn(self) -> FxQuote:
@@ -137,4 +143,3 @@ class CompositeFxProvider(FxProvider):
             except MarketDataError as exc:
                 failures.append(str(exc))
         raise MarketDataError(" ".join(failures))
-

@@ -1,4 +1,5 @@
 import sqlite3
+import pandas as pd
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -60,7 +61,7 @@ def test_migrations_adopt_existing_database_and_recreate_missing_table(tmp_path)
 
     database = Database(path)
     database.initialize()
-    assert database.schema_version() == 7
+    assert database.schema_version() == 9
     with database.connect() as connection:
         columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(trades)")
@@ -139,21 +140,28 @@ def test_live_model_feedback_is_unique_resolved_and_hash_audited(tmp_path) -> No
     created = repository.record_live_model_observation(
         symbol="SMCI",
         observed_at=observed_at,
+        source_bar_at=observed_at,
         reference_price=Decimal("40.00"),
         raw_probability_up=Decimal("0.62"),
         parameters_json=parameters,
+        horizon_minutes=60,
     )
     duplicate = repository.record_live_model_observation(
         symbol="SMCI",
         observed_at=observed_at,
+        source_bar_at=observed_at,
         reference_price=Decimal("40.00"),
         raw_probability_up=Decimal("0.62"),
         parameters_json=parameters,
+        horizon_minutes=60,
     )
     resolved = repository.resolve_live_model_observations(
         symbol="SMCI",
-        current_price=Decimal("41.00"),
-        current_as_of=observed_at + timedelta(minutes=391),
+        historical_bars=pd.DataFrame(
+            {"Open": [40.0], "High": [42.0], "Low": [39.0], "Close": [41.0], "Volume": [100]},
+            index=pd.DatetimeIndex([observed_at + timedelta(minutes=55)]),
+        ),
+        current_as_of=observed_at + timedelta(minutes=61),
     )
     stats = repository.live_model_stats("SMCI")
     valid, invalid = repository.verify_live_model_observations()
@@ -166,4 +174,4 @@ def test_live_model_feedback_is_unique_resolved_and_hash_audited(tmp_path) -> No
     assert 0.52 <= stats["adaptive_threshold"] <= 0.65
     assert valid == 1
     assert invalid == ()
-    assert repository.live_model_calibration_samples("SMCI") == ((0.62, 1),)
+    assert repository.live_model_calibration_samples("SMCI", horizon_minutes=60) == ((0.62, 1),)
