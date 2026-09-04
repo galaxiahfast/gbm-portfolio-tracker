@@ -236,6 +236,7 @@ class ProbabilityAnalysis:
     position_management: str = ""
     buy_levels: ExecutionLevels | None = None
     sell_levels: ExecutionLevels | None = None
+    cross_asset_context: dict = field(default_factory=dict)
 
     @property
     def source_bar_closed_at(self) -> datetime:

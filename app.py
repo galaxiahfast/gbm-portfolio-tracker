@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+from portfolio_tracker.services.cross_asset import enrich_cross_asset, prefetch_cross_asset
+from portfolio_tracker.ui.cross_asset import render_cross_asset
 
 from portfolio_tracker.analytics.backtesting import (
     BacktestBatchResult,
@@ -89,7 +91,7 @@ from portfolio_tracker.services.receipt_storage import ReceiptStorage
 from portfolio_tracker.services.validation import validate_trade
 from portfolio_tracker.ui import apply_premium_ui, premium_bar_chart, premium_line_chart
 from portfolio_tracker.ui.price_zones import render_price_zones
-from portfolio_tracker.services.price_zones import build_zone_snapshot
+from portfolio_tracker.services.price_zones import build_visual_zone_snapshot
 
 
 st.set_page_config(
@@ -1458,7 +1460,6 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
     )
 
     from portfolio_tracker.ui.forward_validation import catch_up, validation_panel
-    from portfolio_tracker.services.zone_forward import log_snapshot
     repository.ensure_zone_forward_schema()
     try:
         forward_status = catch_up(str(repository.database.path))
@@ -1508,6 +1509,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
     }
     try:
         with output.skeleton(height=360):
+            prefetch_cross_asset(symbol)
             intraday, daily = fetch_probability_frames(symbol)
             from portfolio_tracker.services.operational_state import macro_memory
             analysis = analyze_probability(
@@ -1566,6 +1568,8 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         except ValueError as exc:
             fundamental_warning = f"El corte fundamental fue descartado: {exc}"
             fundamental_snapshot = None
+
+    analysis = enrich_cross_asset(analysis, intraday, daily, now=datetime.now(timezone.utc))
 
     # Resolve against raw historical bars before reading calibration samples.
     # Processing time is distinct from the OPEN-labelled analysis.as_of.
@@ -1699,16 +1703,9 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             st.caption("Reliability curves: comparación por intervalos, exclusivamente en holdout.")
             st.dataframe(reliability_rows, hide_index=True)
 
-    zone_snapshot = build_zone_snapshot(analysis)
-    try:
-        forward_log_status = log_snapshot(repository, analysis, zone_snapshot)
-        if forward_log_status["saved"]:
-            st.caption(f"Forward: {forward_log_status['saved']} zonas registradas para validación al cierre.")
-        if (forward_log_status.get("skipped", 0) or "cerrado" in forward_log_status["reason"]
-                or "vencidas" in forward_log_status["reason"]):
-            st.caption(forward_log_status["reason"])
-    except (ValueError, RuntimeError, OSError) as exc:
-        st.warning(f"No se guardó evidencia forward: {exc}")
+    # Vista y PDFs: transformación dinámica exclusivamente en memoria. La única
+    # escritura de zone_prediction_log pertenece al colector headless de las 11 NY.
+    zone_snapshot = build_visual_zone_snapshot(analysis, repository=repository)
     executive_pdf = build_executive_report(analysis, zone_snapshot=zone_snapshot)
     technical_pdf = build_technical_report(analysis, zone_snapshot=zone_snapshot)
     combined_pdf = build_probability_report(analysis, zone_snapshot=zone_snapshot)
@@ -1767,11 +1764,13 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                     online_stats["adaptive_threshold"]
                 ),
             )
+            render_cross_asset(analysis)
             with st.expander("Fundamentales y noticias", expanded=False):
                 _render_fundamental_news(analysis, fundamental_snapshot, compact=True)
     if technical_tab.open:
         with technical_tab:
             render_price_zones(analysis, zone_snapshot=zone_snapshot)
+            render_cross_asset(analysis)
             _render_fundamental_news(analysis, fundamental_snapshot, compact=False)
             signal_labels = {
                 TechnicalSignal.HOLD_LONG: "Posición LONG activa",

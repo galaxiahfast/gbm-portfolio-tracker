@@ -27,6 +27,7 @@ class ReachEstimate:
     model: str = "historical-v1"
     detail: str = ""
     effective_samples: float | None = None
+    confidence_available: bool = True
 
 
 def estimate_zone_reach(frame, price, zones, now=None, min_sessions=20):

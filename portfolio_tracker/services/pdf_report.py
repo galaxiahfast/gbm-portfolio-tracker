@@ -7,9 +7,16 @@ from dataclasses import dataclass
 import hashlib
 from io import BytesIO
 import json
+import math
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape
-from portfolio_tracker.services.price_zones import build_zone_snapshot, distance_to_zone
+from portfolio_tracker.services.price_zones import (
+    build_visual_zone_snapshot,
+    distance_to_zone,
+    market_session_status,
+    projected_extended_levels,
+)
+from portfolio_tracker.services.cross_asset_presentation import cross_asset_rows
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -109,6 +116,14 @@ def executive_decision(analysis: "ProbabilityAnalysis") -> ExecutiveDecision:
 
 def _safe_text(value: object) -> str:
     return str(value).replace("⚠️", "ALERTA:").replace("×", "x").replace("·", "-")
+
+
+def _pdf_float(value):
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _page_footer(canvas, document) -> None:  # type: ignore[no-untyped-def]
@@ -263,6 +278,7 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
         Paragraph(_safe_text(analysis.scenario), styles["BodySmall"]),
     ])
     story.extend(_fundamental_story(analysis, styles))
+    story.extend(_cross_asset_story(analysis, styles))
     if analysis.neckline_heat_warning:
         story.extend(
             [
@@ -356,7 +372,7 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
     story.append(PageBreak())
     story.append(Paragraph("Scores y precios por horizonte", styles["Section"]))
     ordered_projections = ordered_horizon_projections(analysis.horizon_projections)
-    horizon_rows: list[list[object]] = [["Horizonte / estado", "Alcista / objetivo", "Lateral / precios", "Bajista / objetivo", "Sesgo"]]
+    horizon_rows: list[list[object]] = [["Horizonte", "Alcista / objetivo", "Lateral / precios", "Bajista / objetivo", "Sesgo"]]
     horizon_rows.extend(
         [
             Paragraph(f"{item.label}<br/>{_safe_text(item.probability_status)}", styles["BodySmall"]),
@@ -388,8 +404,26 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
     return story
 
 
+def _cross_asset_story(analysis, styles):
+    context = getattr(analysis, "cross_asset_context", {})
+    if not context:
+        return []
+    story = [Paragraph(_safe_text(f"Correlación · Relación con {context.get('peer', 'activo par')}"), styles["Section"])]
+    if context.get("status") != "unavailable":
+        rows = [[Paragraph(_safe_text(key), styles["BodySmall"]),
+                 Paragraph(_safe_text(value), styles["BodySmall"])] for key, value in cross_asset_rows(context)]
+        story.append(_table(rows, [82 * mm, 92 * mm], header=False))
+    for message in [context.get("detail", ""), *context.get("alerts", []),
+                    "Contexto heurístico; no modifica probabilidades de alcance ni autoriza operaciones.",
+                    f"SHA-256 de entradas: {context.get('input_sha256', 'N/D')}"]:
+        story.append(Paragraph(_safe_text(message), styles["BodySmall"]))
+    story.append(Spacer(1, 8))
+    return story
+
+
 def _technical_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  # type: ignore[no-untyped-def]
     story: list[object] = []
+    story.extend(_cross_asset_story(analysis, styles))
     decision = executive_decision(analysis)
     levels = analysis.execution_levels
     story.append(Paragraph("Graficas tecnicas reales", styles["Section"]))
@@ -700,37 +734,77 @@ def _zone_story(analysis, snapshot, styles):
              paragraph(f'Evaluado: {snapshot.evaluated_at.isoformat()} | Precio de referencia: ${analysis.last_price:,.2f} USD'),
              paragraph('Horizonte: desde el último cierre de 5 minutos hasta el cierre de la sesión actual. '
                        'Frecuencia histórica estimada, no calibrada OOS; no garantiza ejecución ni rentabilidad.')]
+    session = market_session_status(snapshot.evaluated_at)
+    if not session.is_open:
+        story.append(paragraph(session.message))
     for heading, zones, estimates in (
         ('Zona de compra / Entrada ideal', snapshot.buys, snapshot.estimates[:3]),
         ('Zona de venta / Objetivos y resistencia', snapshot.sales, snapshot.estimates[3:]),
     ):
         rows = []
         for zone, estimate in zip(zones, estimates):
-            level = ('N/D' if zone.low is None else f'${zone.low:,.2f}' if zone.low == zone.high
-                     else f'${zone.low:,.2f} - ${zone.high:,.2f}')
+            low, high = _pdf_float(zone.low), _pdf_float(zone.high)
+            level = ('N/D' if low is None or high is None else f'${low:,.2f}' if low == high
+                     else f'${low:,.2f} - ${high:,.2f}')
             distance = distance_to_zone(analysis.last_price, zone)
             proximity = ('Distancia N/D' if distance is None else
                          f'Distancia {distance[0]:+,.2f} USD ({distance[1]:+.2f}%)')
-            probability = ('Probabilidad estimada de alcance hoy: N/D' if estimate.probability is None
-                           else f'Probabilidad estimada de alcance hoy: {estimate.probability:.0f}%')
-            interval = (f'IC 95%: {estimate.lower:.0f}-{estimate.upper:.0f}%' if estimate.lower is not None else 'IC 95%: N/D')
-            readings = [paragraph(probability), paragraph(f'{interval} | {estimate.samples} sesiones')]
-            if estimate.model.startswith('conditional-'):
-                direction = 'debajo' if estimate.close_direction == 'BELOW' else 'encima'
-                value = 'N/D' if estimate.close_probability is None else f'{estimate.close_probability:.0f}%'
+            probability_value = _pdf_float(getattr(estimate, 'probability', None))
+            probability = ('Probabilidad estimada de alcance hoy: N/D' if probability_value is None
+                           else f'Probabilidad estimada de alcance hoy: {probability_value:.0f}%')
+            confidence_available = bool(getattr(estimate, 'confidence_available', False))
+            lower = _pdf_float(getattr(estimate, 'lower', None))
+            upper = _pdf_float(getattr(estimate, 'upper', None))
+            interval = (
+                f'IC 95%: {lower:.0f}-{upper:.0f}%'
+                if confidence_available and lower is not None and upper is not None
+                else 'IC 95%: N/D (muestra insuficiente)'
+            )
+            readings = [paragraph(probability), paragraph(f'{interval} | {getattr(estimate, "samples", 0)} sesiones')]
+            model = str(getattr(estimate, 'model', '') or '')
+            if model.startswith(('conditional-', 'dynamic-')):
+                direction = 'debajo' if getattr(estimate, 'close_direction', '') == 'BELOW' else 'encima'
+                close_probability = _pdf_float(getattr(estimate, 'close_probability', None))
+                value = 'N/D' if close_probability is None else f'{close_probability:.0f}%'
                 readings[0] = paragraph(probability + ' (toque / wick)')
                 readings.append(paragraph(f'Cierre final {direction}: {value}'))
-                if estimate.close_lower is not None:
-                    readings.append(paragraph(f'IC 95% cierre: {estimate.close_lower:.0f}-{estimate.close_upper:.0f}%'))
-            if estimate.effective_samples is not None:
-                readings.append(paragraph(f'Muestra efectiva: {estimate.effective_samples:.1f} sesiones'))
-            readings.extend([paragraph(estimate.status), paragraph(proximity)])
+                close_lower = _pdf_float(getattr(estimate, 'close_lower', None))
+                close_upper = _pdf_float(getattr(estimate, 'close_upper', None))
+                if confidence_available and close_lower is not None and close_upper is not None:
+                    readings.append(paragraph(f'IC 95% cierre: {close_lower:.0f}-{close_upper:.0f}%'))
+                else:
+                    readings.append(paragraph('IC 95% cierre: N/D (muestra insuficiente)'))
+            effective = _pdf_float(getattr(estimate, 'effective_samples', None))
+            if effective is not None:
+                readings.append(paragraph(f'Muestra efectiva: {effective:.1f} sesiones'))
+            readings.extend([paragraph(getattr(estimate, 'status', 'N/D')), paragraph(proximity)])
             rows.append([[paragraph(zone.label), paragraph(level), paragraph(zone.source)], readings])
         story.append(KeepTogether([Paragraph(heading, styles['Section']),
                                    _table(rows, [65 * mm, 109 * mm], header=False)]))
-    story.append(paragraph('0% significa que no se observó alcance en la muestra, no imposibilidad. '
-                           'El IC refleja incertidumbre muestral, no todos los errores del modelo.'))
-    if snapshot.estimates and snapshot.estimates[0].model.startswith('conditional-'):
+    extended = tuple(getattr(snapshot, 'extended_levels', ()) or ())
+    if not extended:
+        extended = projected_extended_levels(analysis, snapshot)
+    if extended:
+        heading = ('Soportes extendidos (Proyectados)'
+                   if extended[0].direction == 'BELOW'
+                   else 'Niveles extendidos (Proyectados)')
+        projected_rows = [
+            [paragraph(level.label), paragraph(f'${level.price:,.2f}'), paragraph(level.source)]
+            for level in extended
+        ]
+        story.append(KeepTogether([
+            Paragraph(heading, styles['Section']),
+            paragraph('Referencias visuales en tiempo real; no pertenecen al plan original y no se guardan en el registro forward.'),
+            _table(projected_rows, [65 * mm, 35 * mm, 74 * mm], header=False),
+        ]))
+    if snapshot.estimates and snapshot.estimates[0].model.startswith('dynamic-'):
+        story.append(paragraph('En la vista dinámica, 0% puede significar que ya no queda tiempo de sesión; '
+                               'durante el mercado representa una estimación conservadora desde el corte actual. '
+                               'No significa imposibilidad en otra sesión.'))
+    else:
+        story.append(paragraph('0% significa que no se observó alcance en la muestra, no imposibilidad. '
+                               'El IC refleja incertidumbre muestral, no todos los errores del modelo.'))
+    if snapshot.estimates and snapshot.estimates[0].model.startswith(('conditional-', 'dynamic-')):
         story.append(paragraph(snapshot.estimates[0].detail))
         story.append(paragraph('Contexto S/D, ADX y EMA50 con información previa a cada sesión; '
                                'ajuste por ATR consumido y tiempo restante. Cierre más allá de la frontera exterior '
@@ -753,7 +827,7 @@ def _build_report(
     document = _document(buffer, analysis, title, subject)
     styles = _report_styles()
     story = _report_header(analysis, title, styles)
-    snapshot = zone_snapshot if zone_snapshot is not None else build_zone_snapshot(analysis)
+    snapshot = zone_snapshot if zone_snapshot is not None else build_visual_zone_snapshot(analysis)
     story.extend(_zone_story(analysis, snapshot, styles))
     story.append(PageBreak())
     if include_executive:

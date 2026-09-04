@@ -1,0 +1,1084 @@
+{
+  "observed_at": "2026-09-03T17:16:21.076157+00:00",
+  "local_time": "2026-09-03T13:16:21.076157-04:00",
+  "database": {
+    "total": 78,
+    "resolved": 0,
+    "complete_results": 0,
+    "pending": 78,
+    "overdue": 0,
+    "overdue_ids": [],
+    "resolved_percent": 0.0,
+    "invalid_hashes": 0,
+    "field_issues": [],
+    "duplicates": 0,
+    "near": [
+      {
+        "id": "005edd3a-404d-4026-a2a6-6b684c56ea2a",
+        "previous": "a46ed4da-989e-4dc5-ab71-b67facd603a9",
+        "minutes": 4.885271383333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "3d883ee1-5312-40e1-a7eb-edf2ad5236dc",
+        "previous": "d65b280a-e7f2-4c87-9f78-c9ffa61f5b7e",
+        "minutes": 4.885271383333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "780f83c7-2d5c-4bbd-a2da-923e2caca166",
+        "previous": "120936e9-3f3d-4a5d-85ab-dd497e41b422",
+        "minutes": 4.885271383333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "865c09f8-af0d-459f-bf6e-c3b5e8b67450",
+        "previous": "eaab2142-6f18-4a75-8939-a6e5221cfb43",
+        "minutes": 4.885271383333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "a8671a0e-2eef-44f8-af7d-d77e59d23e82",
+        "previous": "f2e1f41e-2ebe-4f04-8b4b-04e6dadaf756",
+        "minutes": 4.885271383333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "cd0f7b92-a671-4591-80b0-70b6d0f630fa",
+        "previous": "1f4c4486-a73e-4b64-a0ff-85eed2722c4c",
+        "minutes": 4.885271383333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "17c9ef95-2c72-4e2c-b2e1-9827c13f9125",
+        "previous": "20095de2-8bf7-40e2-ac44-ef141652bcef",
+        "minutes": 4.969036183333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "20b4ea7c-8eca-4585-9814-1b7396cf8110",
+        "previous": "3764135d-f1a8-4dfc-b9d4-08c9515b71c3",
+        "minutes": 4.969036183333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "6db0cce0-01eb-4f0c-ba85-b4d506474cd3",
+        "previous": "6451519a-4e2e-4395-8118-9cb57e8ee593",
+        "minutes": 4.969036183333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "71abf4bc-76d2-49c3-898f-9a11e150bae7",
+        "previous": "cecc12d6-73ad-41bd-a446-32e8756f226b",
+        "minutes": 4.969036183333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "e0c72d48-bfa6-4d93-b4fc-970e43ec8165",
+        "previous": "7fee5374-728d-4fae-9861-0a82da38f78a",
+        "minutes": 4.969036183333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "f3e42aee-894e-4fe9-a2ef-987808e9212e",
+        "previous": "b616ab70-6f44-4c64-8cf6-bc420d7695c1",
+        "minutes": 4.969036183333333,
+        "same_closed_bar": false
+      },
+      {
+        "id": "3993ed5c-98c2-4d5e-b3ee-0431f71b9438",
+        "previous": "17c9ef95-2c72-4e2c-b2e1-9827c13f9125",
+        "minutes": 4.988843416666667,
+        "same_closed_bar": false
+      },
+      {
+        "id": "8e695dbf-3bfe-4078-8364-3decb8fc1a70",
+        "previous": "20b4ea7c-8eca-4585-9814-1b7396cf8110",
+        "minutes": 4.988843416666667,
+        "same_closed_bar": false
+      },
+      {
+        "id": "95eb13c2-1747-4c89-b9b9-e1de5a53c2ec",
+        "previous": "71abf4bc-76d2-49c3-898f-9a11e150bae7",
+        "minutes": 4.988843416666667,
+        "same_closed_bar": false
+      },
+      {
+        "id": "a1360055-8a3d-4c37-a919-887fef1c3cdd",
+        "previous": "f3e42aee-894e-4fe9-a2ef-987808e9212e",
+        "minutes": 4.988843416666667,
+        "same_closed_bar": false
+      },
+      {
+        "id": "b40f592d-f212-42f1-8513-96a780039440",
+        "previous": "6db0cce0-01eb-4f0c-ba85-b4d506474cd3",
+        "minutes": 4.988843416666667,
+        "same_closed_bar": false
+      },
+      {
+        "id": "e534a7eb-c441-43ad-8945-b1c1ac23f6d7",
+        "previous": "e0c72d48-bfa6-4d93-b4fc-970e43ec8165",
+        "minutes": 4.988843416666667,
+        "same_closed_bar": false
+      }
+    ],
+    "repeated_hashes": 0,
+    "coverage": [
+      {
+        "symbol": "NVDA",
+        "day": "2026-09-03",
+        "zone": "ENTRY1",
+        "n": 1
+      },
+      {
+        "symbol": "NVDA",
+        "day": "2026-09-03",
+        "zone": "ENTRY2",
+        "n": 1
+      },
+      {
+        "symbol": "NVDA",
+        "day": "2026-09-03",
+        "zone": "ENTRY3",
+        "n": 1
+      },
+      {
+        "symbol": "NVDA",
+        "day": "2026-09-03",
+        "zone": "R3",
+        "n": 1
+      },
+      {
+        "symbol": "NVDA",
+        "day": "2026-09-03",
+        "zone": "TP1",
+        "n": 1
+      },
+      {
+        "symbol": "NVDA",
+        "day": "2026-09-03",
+        "zone": "TP2",
+        "n": 1
+      },
+      {
+        "symbol": "SMCI",
+        "day": "2026-09-03",
+        "zone": "ENTRY1",
+        "n": 12
+      },
+      {
+        "symbol": "SMCI",
+        "day": "2026-09-03",
+        "zone": "ENTRY2",
+        "n": 12
+      },
+      {
+        "symbol": "SMCI",
+        "day": "2026-09-03",
+        "zone": "ENTRY3",
+        "n": 12
+      },
+      {
+        "symbol": "SMCI",
+        "day": "2026-09-03",
+        "zone": "R3",
+        "n": 12
+      },
+      {
+        "symbol": "SMCI",
+        "day": "2026-09-03",
+        "zone": "TP1",
+        "n": 12
+      },
+      {
+        "symbol": "SMCI",
+        "day": "2026-09-03",
+        "zone": "TP2",
+        "n": 12
+      }
+    ],
+    "models": {
+      "46237f1e4fa7da88d1dcb61acee6262f2419b0cd7b5ac9b3ca9caffa7b67a34d": 60,
+      "280d28c858f407481a22a7b37dbeb49c310b70ba8a2b98d8f22d5eb5f2794492": 6,
+      "e92a69d07c59802b0b23f75ef0185de33605868767dba612f0162b63add40fec": 12
+    },
+    "current_model": "dd6da903eaf45aa8f9c126a74bd461cdc8e93718aa07041aae7ee1f02fdec09a",
+    "current_model_records": 0,
+    "correlation_records": 6,
+    "numeric_correlation_records": 6,
+    "mutation_sensitive": 78,
+    "metrics": [],
+    "bins": [],
+    "integrity": [
+      "ok"
+    ],
+    "foreign_keys": []
+  },
+  "logs": {
+    "collector.log": {
+      "exists": true,
+      "sha256": "2e719ac40dd1ff6a8642caa100a7a2106174982345ab3e893cec0d3e6ee92f85",
+      "lines": 22,
+      "runs": [
+        {
+          "job": "collect",
+          "start": "2026-09-03 11:46:30",
+          "end": "2026-09-03 11:46:30",
+          "seconds": 0.0
+        },
+        {
+          "job": "collect",
+          "start": "2026-09-03 11:49:03",
+          "end": "2026-09-03 11:49:09",
+          "seconds": 6.0
+        },
+        {
+          "job": "collect",
+          "start": "2026-09-03 11:49:59",
+          "end": "2026-09-03 11:49:59",
+          "seconds": 0.0
+        },
+        {
+          "job": "resolve",
+          "start": "2026-09-03 11:50:00",
+          "end": "2026-09-03 11:50:00",
+          "seconds": 0.0
+        },
+        {
+          "job": "catchup",
+          "start": "2026-09-03 11:50:01",
+          "end": "2026-09-03 11:50:01",
+          "seconds": 0.0
+        },
+        {
+          "job": "catchup",
+          "start": "2026-09-03 11:54:58",
+          "end": "2026-09-03 11:54:58",
+          "seconds": 0.0
+        }
+      ],
+      "errors": [],
+      "tail": [
+        "2026-09-03 11:46:30 EDT - INFO - Inicio collect: símbolos=SMCI,NVDA; programado=False; permitido=True",
+        "2026-09-03 11:46:30 EDT - INFO - Comprobación sin descargas/escrituras DB. Próximo paso: ejecutar sin --check-only.",
+        "2026-09-03 11:46:30 EDT - INFO - Fin collect",
+        "2026-09-03 11:49:03 EDT - INFO - Inicio collect: símbolos=SMCI,NVDA; programado=False; permitido=True",
+        "2026-09-03 11:49:03 EDT - INFO - SMCI: ya hay seis zonas íntegras de hoy; sin duplicar",
+        "2026-09-03 11:49:09 EDT - INFO - NVDA: predicción guardada. 6 zonas. Registro prospectivo; recargas del mismo corte no se duplican.",
+        "2026-09-03 11:49:09 EDT - INFO - Fin collect",
+        "2026-09-03 11:49:59 EDT - INFO - Inicio collect: símbolos=SMCI,NVDA; programado=False; permitido=True",
+        "2026-09-03 11:49:59 EDT - INFO - SMCI: ya hay seis zonas íntegras de hoy; sin duplicar",
+        "2026-09-03 11:49:59 EDT - INFO - NVDA: ya hay seis zonas íntegras de hoy; sin duplicar",
+        "2026-09-03 11:49:59 EDT - INFO - Fin collect",
+        "2026-09-03 11:50:00 EDT - INFO - Inicio resolve: símbolos=SMCI,NVDA; programado=False; permitido=False",
+        "2026-09-03 11:50:00 EDT - INFO - Sin trabajo: fuera de sesión/ventana NY o festivo.",
+        "2026-09-03 11:50:00 EDT - INFO - Fin resolve",
+        "2026-09-03 11:50:01 EDT - INFO - Inicio catchup: símbolos=SMCI,NVDA; programado=False; permitido=True",
+        "2026-09-03 11:50:01 EDT - INFO - Activos configurados/pendientes: SMCI,NVDA",
+        "2026-09-03 11:50:01 EDT - INFO - Resolución: 0 registros resueltos; 0 pendientes; 0 firmas inválidas",
+        "2026-09-03 11:50:01 EDT - INFO - Fin catchup",
+        "2026-09-03 11:54:58 EDT - INFO - Inicio catchup: símbolos=SMCI,NVDA; programado=False; permitido=True",
+        "2026-09-03 11:54:58 EDT - INFO - Activos configurados/pendientes: SMCI,NVDA",
+        "2026-09-03 11:54:58 EDT - INFO - Catch-up: no hay sesiones vencidas pendientes; 48 registros aún no vencen; sin cambios",
+        "2026-09-03 11:54:58 EDT - INFO - Fin catchup"
+      ]
+    },
+    "resolver.log": {
+      "exists": false
+    },
+    "catchup.log": {
+      "exists": false
+    }
+  },
+  "scheduler": {
+    "checked_at": "2026-09-03; consulta de solo lectura durante esta auditoria",
+    "returncode": 0,
+    "tasks": [],
+    "error": "",
+    "source": "Get-ScheduledTask ejecutado con permisos de lectura elevados. Filtro GBM|backup|portfolio: solo tareas Microsoft/Windows MareBackup, AppListBackup, CloudRestore y RegIdleBackup; ninguna GBM_Forward_Collector, GBM_Forward_Resolver ni GBM_Forward_Catchup. No se modificaron tareas."
+  },
+  "tests": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "0",
+    "tests": "321",
+    "time": "63.304",
+    "timestamp": "2026-09-03T11:12:16.696944-06:00",
+    "hostname": "PC-PROGRAMADOR",
+    "exit_code": 0,
+    "reused_source": "C:\\Users\\MOISES INFORMATICA\\Desktop\\STOCK\\output\\audit_predictions\\20260903_171215\\pytest.xml",
+    "reused_reason": "Fuentes del sistema sin cambios desde esta ejecución; sólo se ajustó el generador de auditoría."
+  },
+  "probes": [
+    {
+      "name": "Red desconectada (inyección controlada)",
+      "passed": true,
+      "exit_code": 1,
+      "detail": "Fallo inyectado en proveedor; continúa ambos símbolos; salida controlada 1 para reintento.",
+      "log": "2026-09-03 13:13:22 EDT - ERROR - SMCI: error de colección; se continúa con los demás activos\nTraceback (most recent call last):\n  File \"C:\\Users\\MOISES INFORMATICA\\Desktop\\STOCK\\scripts\\autopilot_runtime.py\", line 234, in collect\n    intraday, daily = cache.frames(symbol, now_fn())\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1134, in __call__\n    return self._mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1138, in _mock_call\n    return self._execute_mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1193, in _execute_mock_call\n    raise effect\nConnectionError: AUDIT simulated network outage\n2026-09-03 13:13:22 EDT - ERROR - NVDA: error de colección; se continúa con los demás activos\nTraceback (most recent call last):\n  File \"C:\\Users\\MOISES INFORMATICA\\Desktop\\STOCK\\scripts\\autopilot_runtime.py\", line 234, in collect\n    intraday, daily = cache.frames(symbol, now_fn())\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1134, in __call__\n    return self._mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1138, in _mock_call\n    return self._execute_mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1193, in _execute_mock_call\n    raise effect\n  File \"C:\\Users\\MOISES INFORMATICA\\Desktop\\STOCK\\scripts\\autopilot_runtime.py\", line 234, in collect\n    intraday, daily = cache.frames(symbol, now_fn())\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1134, in __call__\n    return self._mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1138, in _mock_call\n    return self._execute_mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1193, in _execute_mock_call\n    raise effect\nConnectionError: AUDIT simulated network outage\n"
+    },
+    {
+      "name": "Resolvedor antes del cierre",
+      "passed": true,
+      "detail": "15:00 NY: no consulta cierre futuro y conserva pendiente."
+    },
+    {
+      "name": "Catch-up multiactivo, atrasos e idempotencia",
+      "passed": true,
+      "detail": "Dos activos, dos sesiones atrasadas; resuelve 4 registros. Segundo arranque: cero descargas adicionales.",
+      "calls": [
+        [
+          "NVDA",
+          "2026-08-27"
+        ],
+        [
+          "SMCI",
+          "2026-08-27"
+        ],
+        [
+          "NVDA",
+          "2026-08-28"
+        ],
+        [
+          "SMCI",
+          "2026-08-28"
+        ]
+      ]
+    },
+    {
+      "name": "Terminación abrupta durante transacción SQLite",
+      "passed": true,
+      "detail": "Proceso hijo termina sin finally/rollback: commit previo persiste; transacción abierta desaparece. No equivale a corte eléctrico físico.",
+      "child_exit": 79,
+      "integrity": "ok",
+      "committed": 1,
+      "uncommitted": 0
+    },
+    {
+      "name": "Umbral 0.70 revalidado en apply_cross_context",
+      "passed": false,
+      "detail": "Prueba de defensa de la función de aplicación; el constructor normal sí filtra >0.70, pero se comprueba también la frontera pública.",
+      "values": [
+        {
+          "correlation": 0.2,
+          "applied": 5.0
+        },
+        {
+          "correlation": 0.7,
+          "applied": 5.0
+        },
+        {
+          "correlation": 0.71,
+          "applied": 5.0
+        }
+      ]
+    },
+    {
+      "name": "Equivalencia semántica frente a identidad SHA-256",
+      "passed": true,
+      "detail": "Mismo contenido da UUID y forecast_sha256 diferentes por diseño. Comparar contenido canónico sin id, no firmas de registros distintos.",
+      "same_forecast_sha256": false,
+      "same_content": true
+    }
+  ],
+  "benchmark": [
+    {
+      "symbol": "SMCI",
+      "status": "MEDIDO",
+      "timings": {
+        "download_cold_s": 2.792603799999597,
+        "download_warm_s": 0.8665038999997705,
+        "peer_cold_s": 0.5405749000001379,
+        "fundamental_cold_s": 2.9525684999998703,
+        "headless_compute_and_zones_s": 2.6498015999995914,
+        "ui_extracted_compute_and_zones_s": 2.2588113999991037,
+        "zone_repeat_s": 0.085431299999982,
+        "warm_lower_bound_s": 3.516305499999362,
+        "cold_serial_measured_s": 8.935548799999196
+      },
+      "as_of": "2026-09-03T17:13:31.793911+00:00",
+      "intraday_bars": 1838,
+      "daily_bars": 1254,
+      "same_zone_snapshot": true,
+      "same_forecast_content": true,
+      "headless_records": 6,
+      "ui_records": 6,
+      "hashes_equal": false,
+      "parameters": "defaults, same empty operational/account state",
+      "fundamental_available": true,
+      "correlation": {
+        "status": "available",
+        "symbol": "SMCI",
+        "peer": "NVDA",
+        "correlation": 0.5313111935288658,
+        "return_period": 20,
+        "return_samples": 20,
+        "daily_as_of": "2026-09-02",
+        "observed_at": "2026-09-03T17:13:31.793911+00:00",
+        "ratio": {
+          "value": 0.16487678533132738,
+          "mean50": 0.14983160618876665,
+          "deviation_pct": 10.041392150335703
+        },
+        "rsi14": {
+          "SMCI": 56.28414346426196,
+          "NVDA": 56.6703511878016
+        },
+        "alerts": [
+          "Diario: SMCI baja pero NVDA sube en 6 sesiones: divergencia; posible frenazo.",
+          "SMCI sube pero NVDA baja en 30 min: divergencia; posible frenazo."
+        ],
+        "intraday_as_of": "2026-09-03T17:10:00+00:00",
+        "proposed_impact": 0.0,
+        "applied_impact": 0.0,
+        "detail": "Retornos diarios cerrados; ajuste sólo del score heurístico, no de probabilidades calibradas.",
+        "daily_divergence": {
+          "alerts": [
+            "SMCI baja pero NVDA sube en 6 sesiones: divergencia; posible frenazo."
+          ],
+          "SMCI": {
+            "high": false,
+            "low": false,
+            "up": false,
+            "down": false,
+            "rvol": 0.6182022063127494,
+            "momentum": -0.03796149556041983
+          },
+          "NVDA": {
+            "high": false,
+            "low": false,
+            "up": false,
+            "down": false,
+            "rvol": 1.2390094077220053,
+            "momentum": 0.05332081881074546
+          }
+        },
+        "intraday": {
+          "SMCI": {
+            "high": false,
+            "low": false,
+            "up": false,
+            "down": false,
+            "rvol": 0.49168977526330115,
+            "momentum": 0.002222524578723517
+          },
+          "NVDA": {
+            "high": false,
+            "low": false,
+            "up": false,
+            "down": false,
+            "rvol": 0.5830553295586302,
+            "momentum": -0.0006295973647417741
+          }
+        },
+        "input_sha256": "a3ceb10e01899d0c7a4279957c39d32d7b13b35b9613faf862a3f3cc394e2e5e",
+        "base_score": 60.4
+      },
+      "scope": "AST de las tres llamadas reales UI; no navegador, no calibración de otros horizontes ni renderizado/PDF.",
+      "inputs_sha256": "c7f8c903598293edeef9906d7f65a9df483c4f2c420f283d117c13d404c3f999"
+    },
+    {
+      "symbol": "NVDA",
+      "status": "MEDIDO",
+      "timings": {
+        "download_cold_s": 1.424072900000283,
+        "download_warm_s": 0.9355114999998477,
+        "peer_cold_s": 0.4808634000000893,
+        "fundamental_cold_s": 2.551496000000043,
+        "headless_compute_and_zones_s": 2.2776726000001872,
+        "ui_extracted_compute_and_zones_s": 2.244828600000801,
+        "zone_repeat_s": 0.09961480000038136,
+        "warm_lower_bound_s": 3.213184100000035,
+        "cold_serial_measured_s": 6.734104900000602
+      },
+      "as_of": "2026-09-03T17:13:42.477503+00:00",
+      "intraday_bars": 1838,
+      "daily_bars": 1254,
+      "same_zone_snapshot": true,
+      "same_forecast_content": true,
+      "headless_records": 6,
+      "ui_records": 6,
+      "hashes_equal": false,
+      "parameters": "defaults, same empty operational/account state",
+      "fundamental_available": true,
+      "correlation": {
+        "status": "available",
+        "symbol": "NVDA",
+        "peer": "SMCI",
+        "correlation": 0.531311193526092,
+        "return_period": 20,
+        "return_samples": 20,
+        "daily_as_of": "2026-09-02",
+        "observed_at": "2026-09-03T17:13:42.477503+00:00",
+        "ratio": {
+          "value": 0.16487678533133426,
+          "mean50": 0.1498316061887715,
+          "deviation_pct": 10.041392150336748
+        },
+        "rsi14": {
+          "NVDA": 56.67035118779059,
+          "SMCI": 56.28414346433051
+        },
+        "alerts": [
+          "Diario: NVDA sube pero SMCI baja en 6 sesiones: divergencia; posible frenazo.",
+          "NVDA baja pero SMCI sube en 30 min: divergencia; posible frenazo."
+        ],
+        "intraday_as_of": "2026-09-03T17:10:00+00:00",
+        "proposed_impact": 0.0,
+        "applied_impact": 0.0,
+        "detail": "Retornos diarios cerrados; ajuste sólo del score heurístico, no de probabilidades calibradas.",
+        "daily_divergence": {
+          "alerts": [
+            "NVDA sube pero SMCI baja en 6 sesiones: divergencia; posible frenazo."
+          ],
+          "NVDA": {
+            "high": false,
+            "low": false,
+            "up": false,
+            "down": false,
+            "rvol": 1.2390094077220053,
+            "momentum": 0.053320818810493
+          },
+          "SMCI": {
+            "high": false,
+            "low": false,
+            "up": false,
+            "down": false,
+            "rvol": 0.6182022063127494,
+            "momentum": -0.037961495559735936
+          }
+        },
+        "intraday": {
+          "NVDA": {
+            "high": false,
+            "low": false,
+            "up": false,
+            "down": false,
+            "rvol": 0.5830553295586302,
+            "momentum": -0.0006295973647417741
+          },
+          "SMCI": {
+            "high": false,
+            "low": false,
+            "up": false,
+            "down": false,
+            "rvol": 0.49168977526330115,
+            "momentum": 0.002222524578723517
+          }
+        },
+        "input_sha256": "a3ceb10e01899d0c7a4279957c39d32d7b13b35b9613faf862a3f3cc394e2e5e",
+        "base_score": 56.0
+      },
+      "scope": "AST de las tres llamadas reales UI; no navegador, no calibración de otros horizontes ni renderizado/PDF.",
+      "inputs_sha256": "ac37db50f1bc438b3f22b0f9d3c46c3de3caa80dd996fc8b3d85d9f43da942e1"
+    }
+  ],
+  "sources": {
+    "app.py": {
+      "sha256": "ce2094ec7121ac672b06a0b1bc35d7e529ba3fcb5d9297383c4dabf75ce7d762",
+      "lines": 2909
+    },
+    "portfolio_tracker/__init__.py": {
+      "sha256": "ef041a3353cea389d1ec4cd2610ae57f2c60d28a66fabbfd5d1c11f4d8018f8d",
+      "lines": 4
+    },
+    "portfolio_tracker/analytics/__init__.py": {
+      "sha256": "da4fa42729cf8877b2727d541d1d220cf3774e78845f15bc77ac15f6880051d5",
+      "lines": 22
+    },
+    "portfolio_tracker/analytics/backtesting.py": {
+      "sha256": "b02fd301fb8b7787c1473b314493460058814d434343b626978658cb58987170",
+      "lines": 1069
+    },
+    "portfolio_tracker/analytics/base.py": {
+      "sha256": "74350a8284d80ed96702c2ea24dd2b928cd4f64a513fe442b132dae4afd74d44",
+      "lines": 48
+    },
+    "portfolio_tracker/analytics/causal_core.py": {
+      "sha256": "a613990f7b5df13a81f27f2b10d81ee62a1e33726b785cdddca37f429ce1e85b",
+      "lines": 151
+    },
+    "portfolio_tracker/analytics/chart_patterns.py": {
+      "sha256": "c56f9168a4f85febd883cdf7727c853d8f8f090c30226c4eb100a5ed5050214b",
+      "lines": 678
+    },
+    "portfolio_tracker/analytics/closed_bars.py": {
+      "sha256": "beec562563fc7ad3e001986ce68b481a6e931804d6f83ea310dc250cc222fa13",
+      "lines": 81
+    },
+    "portfolio_tracker/analytics/conditional_zone_reach.py": {
+      "sha256": "996025775d1e74452276b8d52af00f2f8fc7abf2d1d58328ebfeb621e7a0ac06",
+      "lines": 212
+    },
+    "portfolio_tracker/analytics/cross_correlation.py": {
+      "sha256": "abc3219876c80c363ec00623298117a05b64c7644c26e25367a250dccaa1375c",
+      "lines": 226
+    },
+    "portfolio_tracker/analytics/decision_engines.py": {
+      "sha256": "5b1802ffdcb865f94570f9c86a32cecc6c0375f8cb031ffc862bea26034c77c7",
+      "lines": 29
+    },
+    "portfolio_tracker/analytics/fundamental_news.py": {
+      "sha256": "23873159a8b310c1b3e799afec596031f044e9f35d31de2bda089e8c8003950f",
+      "lines": 775
+    },
+    "portfolio_tracker/analytics/multi_timeframe.py": {
+      "sha256": "0b4451eb34488d3a89b5ced840005dcfba1e616ab5af5067c3ab865fc3f07719",
+      "lines": 770
+    },
+    "portfolio_tracker/analytics/probability_calibration.py": {
+      "sha256": "893006e72dbebe6d9f813da82aefd1644d760f8012e752faec8178ec5699ca78",
+      "lines": 310
+    },
+    "portfolio_tracker/analytics/replay.py": {
+      "sha256": "5361511ec7a083bcd7a66f701bd236a737cabdcc38ade18affe1a916d939e400",
+      "lines": 124
+    },
+    "portfolio_tracker/analytics/risk.py": {
+      "sha256": "c8c06b9b26827c81239fa1b8243380d2343f907a70578ecf235bd272691e4abb",
+      "lines": 26
+    },
+    "portfolio_tracker/analytics/technical_probability.py": {
+      "sha256": "b0f610a3474c654457e5633e876b90e04ef8a03f7b7b14c00fc2a216baf2f32f",
+      "lines": 1300
+    },
+    "portfolio_tracker/analytics/technical_validity.py": {
+      "sha256": "b8d8d42245713ec367221f6daf291c849aeac829d6bfd75d6f130a1d2b107461",
+      "lines": 75
+    },
+    "portfolio_tracker/analytics/zone_reach.py": {
+      "sha256": "b9e4250e7ec3e50403ed22a9ab727364760810101f76c62c7b1d2947bba82ae1",
+      "lines": 112
+    },
+    "portfolio_tracker/config.py": {
+      "sha256": "ba0105697900eaabf97d694520a44f7d6d0a93436dda6a51f23587c436bb1840",
+      "lines": 30
+    },
+    "portfolio_tracker/db.py": {
+      "sha256": "cd780dc5ead21a2b6c9ebaf985f79f2f7b433260791759c3329b57a532e5ab41",
+      "lines": 563
+    },
+    "portfolio_tracker/models.py": {
+      "sha256": "d32130cb5c528e2197e998edb6d452d5f2af52b5ef9f900524eeed02dcab99f9",
+      "lines": 166
+    },
+    "portfolio_tracker/repository.py": {
+      "sha256": "175381cfa9b1fedcf038a4c132f5d9a5d0d369eed6ffa7b93607f74c0da2904d",
+      "lines": 930
+    },
+    "portfolio_tracker/services/__init__.py": {
+      "sha256": "fd5d9eff941ac313e18245b2adef16c965283c2e83798d103ec5bbb4f67e6f74",
+      "lines": 2
+    },
+    "portfolio_tracker/services/audit.py": {
+      "sha256": "50e8d5e00011f048c111a81f3789b1a167cfaf3d451556eb529b87b814b94138",
+      "lines": 465
+    },
+    "portfolio_tracker/services/cross_asset.py": {
+      "sha256": "b0aa585c26ef6a9081614fefcee809e797f4bdc6b32151e687c4dbabf6cd8373",
+      "lines": 65
+    },
+    "portfolio_tracker/services/cross_asset_presentation.py": {
+      "sha256": "07eb455417f576a38c48a71f6dcb92a32d0c84119c9e67b1be8e527e0ba967b9",
+      "lines": 18
+    },
+    "portfolio_tracker/services/cross_validation.py": {
+      "sha256": "66067b58ba898cfb95f03cea44945a88140ef57adac73d6cac75a2d877f0ea91",
+      "lines": 21
+    },
+    "portfolio_tracker/services/forward_market.py": {
+      "sha256": "14fd79f6c16dfb543f02ad4757dbdef26125b3b30bb48c140bcf149f274373e0",
+      "lines": 99
+    },
+    "portfolio_tracker/services/implementation_status.py": {
+      "sha256": "cd2988e40ae6b63f1fc27765b4b6b9a2e6475cfa1770b800cb370edf69d1b0d3",
+      "lines": 95
+    },
+    "portfolio_tracker/services/market_data.py": {
+      "sha256": "f2643976748de9c7f628d1c3b8758ff773139afd52c05a7ad0cf13e7cb5c4d18",
+      "lines": 145
+    },
+    "portfolio_tracker/services/model_observations.py": {
+      "sha256": "3014b680e1521478528f622aa9b6592b87dd32bbb2d76bc1165d80414b601edf",
+      "lines": 140
+    },
+    "portfolio_tracker/services/ocr.py": {
+      "sha256": "0d075dea1a5e53162b83374c9cd1d0502f78d92142ae77aa50f040b28a1514cd",
+      "lines": 382
+    },
+    "portfolio_tracker/services/operational_state.py": {
+      "sha256": "74dcd31277e182b142a21f310bd160a7e8625e1cf8e9d60d76659a5974fb479f",
+      "lines": 117
+    },
+    "portfolio_tracker/services/pdf_report.py": {
+      "sha256": "66eac67858f511c5dd39bbea0d8b34cdcb1a68195994d8aec90d15fc2cd5d120",
+      "lines": 848
+    },
+    "portfolio_tracker/services/pdf_technical_charts.py": {
+      "sha256": "cd5ea2ac7950af59d2fe2eb9ca20c390b2ac739b91a77e665bc149e80bbc008a",
+      "lines": 400
+    },
+    "portfolio_tracker/services/portfolio.py": {
+      "sha256": "85e1c257055140a60ef8adab167fe3adc9e3de580a5d870436873be7cb817fca",
+      "lines": 147
+    },
+    "portfolio_tracker/services/price_zones.py": {
+      "sha256": "563bca5a09823766fd2dea4332455fdf144b878f16f8a0e384d3e7574916429c",
+      "lines": 135
+    },
+    "portfolio_tracker/services/projection_chart.py": {
+      "sha256": "d0bf43bc611f890a05931e820358be93d905271e0dcc1f50855b34b1cfc2fe9a",
+      "lines": 318
+    },
+    "portfolio_tracker/services/quant_market_data.py": {
+      "sha256": "5eb2703d2127ccde7ad451569d435d613c82917340036d62682d26038ae7a0c5",
+      "lines": 129
+    },
+    "portfolio_tracker/services/receipt_storage.py": {
+      "sha256": "6ebfbcd7d2cb2314a340db40d53e0984aab36daf6d15e737d07e6f3a180b96d7",
+      "lines": 84
+    },
+    "portfolio_tracker/services/scenario_calibration.py": {
+      "sha256": "526468aa9691527662e872d6c5806da28dbc5e86c81ead9f79ded5851c63c789",
+      "lines": 73
+    },
+    "portfolio_tracker/services/validation.py": {
+      "sha256": "4731afaec3aa39f8385e0b9c5661fcc3b789bff6fc958a922199786ae0706133",
+      "lines": 86
+    },
+    "portfolio_tracker/services/zone_forward.py": {
+      "sha256": "459cdcf1dc12a4d400dcce0d684ebf4f67f18ed1355c28e80625c06a36eef7c2",
+      "lines": 394
+    },
+    "portfolio_tracker/ui/__init__.py": {
+      "sha256": "396183fb66924ef271f60b995bb2e2ba713421b95db4968235d51ef715f8ea07",
+      "lines": 6
+    },
+    "portfolio_tracker/ui/charts.py": {
+      "sha256": "7e7afd932685123a16c40d7cd4a8ed39ec072dd02ead4e3f7e121b119c219f65",
+      "lines": 194
+    },
+    "portfolio_tracker/ui/cross_asset.py": {
+      "sha256": "29da1ab1005092faca28672c986e8c38da338d1d1befae97d7eaa28dc59438ea",
+      "lines": 21
+    },
+    "portfolio_tracker/ui/forward_validation.py": {
+      "sha256": "89849f7fe8bd5ffc956dc2434b135706eca43da1194a996bceb17d1843d89806",
+      "lines": 127
+    },
+    "portfolio_tracker/ui/price_zones.py": {
+      "sha256": "ec22d5b4821d87afdcaee8ae203d8e0b4439d8042a4783f433ab8aa0cf216cd2",
+      "lines": 67
+    },
+    "portfolio_tracker/ui/theme.py": {
+      "sha256": "fe676b86d1504a22471fc92276bfcb8b54fc6abca5013c667ad82f19f79eadaa",
+      "lines": 693
+    },
+    "requirements.txt": {
+      "sha256": "ab72812216311988722485f516f566ac18453a697e827f5b67a381ad49e7968f",
+      "lines": 20
+    },
+    "scripts/audit_phase5.py": {
+      "sha256": "49bea420eb051807f7c1259c6a7b4d4557a7793e997eca546cd75cae0cf5e0b4",
+      "lines": 373
+    },
+    "scripts/audit_predictions.py": {
+      "sha256": "e8461079f7ae71faa6cb05f81406e0e3f068c95e80dcf354f8fb132cf3ee1f33",
+      "lines": 684
+    },
+    "scripts/auto_resolver.py": {
+      "sha256": "9a6bf3817dfae6f27df4f1a29805b79111dc5aac8fb1cdc21e9af441149bdebb",
+      "lines": 10
+    },
+    "scripts/autopilot_market_cache.py": {
+      "sha256": "be4102c8fd56903e0db92f101c73a96d895223c83e25b5127b334e3ea097f652",
+      "lines": 94
+    },
+    "scripts/autopilot_runtime.py": {
+      "sha256": "c138df96a0b130b1cd34ac14bdba58bba54ee8ac03247b40c43e3537a7fe71e9",
+      "lines": 328
+    },
+    "scripts/boot_catchup.py": {
+      "sha256": "769f3416ff7517cd0ca18b3b07164148cc73c43522622409865fa04a5b04ed56",
+      "lines": 10
+    },
+    "scripts/check_cross_asset.py": {
+      "sha256": "16be0792225377d9a4a025aadedea968e154bf04aeed5b3dae92aa9c50a9d7b0",
+      "lines": 61
+    },
+    "scripts/daily_auto_collector.py": {
+      "sha256": "8cbc717594b4aeb9fa1ca0c3bd1cfef6b458ff09d471bf10b6e59a50d8877b64",
+      "lines": 10
+    },
+    "scripts/github_backup.py": {
+      "sha256": "1707cbeb56554e2492f150c8e85670e3c81bf1c281b064fc868bb2296250929d",
+      "lines": 159
+    },
+    "scripts/install_autopilot_tasks.ps1": {
+      "sha256": "bf6c8e0ca9018988ce076f104edc9b60bc491662e75aa870f1d1d2929e7f9633",
+      "lines": 115
+    },
+    "scripts/resolve_daily_predictions.py": {
+      "sha256": "bc980c4e9aefd40b9064fa34f17dcd1c22acb8503fb3b80f39032742d6a287f3",
+      "lines": 74
+    },
+    "scripts/sync_github_backup.ps1": {
+      "sha256": "703fe72e6be9cad6d33329b876ebece67d4ee022756974a1cef8a26ca9aaecd1",
+      "lines": 20
+    },
+    "tests/market_fixtures.py": {
+      "sha256": "13621cc896b95a925469c91ff02145f5b29ef8b13abdc4eda254c996f916b5db",
+      "lines": 11
+    },
+    "tests/test_audit.py": {
+      "sha256": "e1cfa3ad7fb69737de35a5d6b444fe0e890ad498321568668d6ed11adb8f9832",
+      "lines": 48
+    },
+    "tests/test_autopilot.py": {
+      "sha256": "0004b6c6217bf6dcfe08591711b0d81acfcf909b6f984b7c25a536da799f345f",
+      "lines": 256
+    },
+    "tests/test_backtesting.py": {
+      "sha256": "096e8fb35f346dca8f60aa1c45e729282e16783af81c7c59efa02adb56a76baf",
+      "lines": 176
+    },
+    "tests/test_calibration_oos.py": {
+      "sha256": "713dcc4557d6c7c66d68adfb05b013c703e8043240c87b605583d263a51ccf51",
+      "lines": 171
+    },
+    "tests/test_causal_replay.py": {
+      "sha256": "3b8545b4635388fe46a24a0938bdec0d0d7caae261654660b9640fcb80c6dcc7",
+      "lines": 183
+    },
+    "tests/test_chart_patterns.py": {
+      "sha256": "a49e1836ba786e4a44883944f2344a47eddedbdb20062f66b296db89e615db76",
+      "lines": 226
+    },
+    "tests/test_conditional_zone_reach.py": {
+      "sha256": "e7da0df604c0c30a3487920ec7d6cf2c3df02d25d2cb0b37d9606a21a1a48f30",
+      "lines": 81
+    },
+    "tests/test_cross_correlation.py": {
+      "sha256": "bc98181cf2d10295fe7eb8798a34c26919f4b7ce4c2a0fd904084b1b4b4e32ed",
+      "lines": 302
+    },
+    "tests/test_fundamental_news.py": {
+      "sha256": "2e211c72bd39bf9141dcf032a373025bcc2a1ddab3cebadc5add5c66a033768d",
+      "lines": 173
+    },
+    "tests/test_fundamental_periods_f09.py": {
+      "sha256": "56736a29a6d21c870a6af7f91add675f59fbd8b6c49589407ef646b98935b18a",
+      "lines": 226
+    },
+    "tests/test_github_backup.py": {
+      "sha256": "df53c91253f2eeb137abed688c571d8765f95a27a6d2c9d4487b20f1bb0e58d7",
+      "lines": 40
+    },
+    "tests/test_implementation_status.py": {
+      "sha256": "badd8decdaf93d5967f26717092249766cadb7fb23f3ca68d4c2fb82c6d66717",
+      "lines": 20
+    },
+    "tests/test_live_model_integrity.py": {
+      "sha256": "5872b30c6a5640630f2a8c10441ca66fff5f29306fb95c01d6587abd19e84e47",
+      "lines": 223
+    },
+    "tests/test_multi_timeframe.py": {
+      "sha256": "ffee87fb6075bb4e2a5bb8ba3d96b95744583e3ed4a27c7a1915efe82646dcd0",
+      "lines": 313
+    },
+    "tests/test_ocr_parser.py": {
+      "sha256": "034015f3c864446acd50bd0c5eec68e418028f0370ac2c51d10c999fc32cd573",
+      "lines": 107
+    },
+    "tests/test_operational_architecture.py": {
+      "sha256": "7cf30c6cf998d6614d10ee7674e1331204afb7a61de32713cba79caa774f28d4",
+      "lines": 170
+    },
+    "tests/test_pdf_report.py": {
+      "sha256": "1f950a5b5cff209082200e553ca82337293a8e4133b09956c0b82c4080d85619",
+      "lines": 182
+    },
+    "tests/test_portfolio.py": {
+      "sha256": "b2979c7e18f8534c012809059de8b7ba85a5ac4cb2af82714b4f80dc44094703",
+      "lines": 58
+    },
+    "tests/test_price_zones_ui.py": {
+      "sha256": "4cb0685cef12496545056410cbd8b039d2766f9011dad024f577b89b09c1d239",
+      "lines": 106
+    },
+    "tests/test_probability_calibration.py": {
+      "sha256": "75de882d65d945fda938b9b4242b738fafa2d731bce6d999ed7b9ba2f70f75ae",
+      "lines": 47
+    },
+    "tests/test_projection_chart.py": {
+      "sha256": "55a8f1b13fbc2b744b3be5c5aaed5143e06643f478b2f8bbbffd65a590e1dc62",
+      "lines": 107
+    },
+    "tests/test_quant_minimal_view.py": {
+      "sha256": "38ae43925919f7cfe2611593d19e8cb33df9f46d3925e8771494af262dae2b4b",
+      "lines": 38
+    },
+    "tests/test_repository.py": {
+      "sha256": "573ed8e00310f859a69db31bbab905059e5fa1091fe15e92ac5d71040c50e28c",
+      "lines": 177
+    },
+    "tests/test_risk_data_validity.py": {
+      "sha256": "f07f0796fef3a74246fc02b9260a493414ae5024cc5f236e68f23af3474ab26f",
+      "lines": 131
+    },
+    "tests/test_streamlit_layout.py": {
+      "sha256": "24787ecfc1263a8a4c3c2d289e155ffb2d75e591c1665f261d3dc8c628dc57c2",
+      "lines": 63
+    },
+    "tests/test_technical_probability.py": {
+      "sha256": "b0f7073aa39c219cd8a4d4f16cb4268f5e61f7f6e763e9afd938fa229f9da6ea",
+      "lines": 467
+    },
+    "tests/test_ui_theme.py": {
+      "sha256": "3509d34014d319a877b351b17b87cbfa28c8f1b48b63c0aeaf2a9bbf347062df",
+      "lines": 61
+    },
+    "tests/test_weighted_zone_reach.py": {
+      "sha256": "8e1ace0c220dc473a71f6857c1a71aab997dc3201344dbe750192c616d336731",
+      "lines": 71
+    },
+    "tests/test_zone_forward.py": {
+      "sha256": "5ae16aecc6ed2b4785972e351dcb7412b66ee148b656b6100598c0927ce3d080",
+      "lines": 283
+    },
+    "tests/test_zone_pdf.py": {
+      "sha256": "f159fb3ae7f8153358551bf7b23a24052ec090d3d55e333ba511fb94408ea742",
+      "lines": 45
+    },
+    "tests/test_zone_reach.py": {
+      "sha256": "1feccc8941c1111da694e7e5e58fe153fbcdf27c6e4e4ae1a49f5857266a59bb",
+      "lines": 95
+    }
+  },
+  "backup": {
+    "encrypted_exists": false,
+    "manifest_exists": false
+  },
+  "ledger_before": {
+    "trades": {
+      "count": 1,
+      "sha256": "8a4c0d3a73e830e3c0a4f0d2a87adcf3d7676517ebee7ea4beb7838c870138bd"
+    },
+    "cash_movements": {
+      "count": 1,
+      "sha256": "626c5eccb56a34b9fa343c130fb7ca2fd37418707e9ea0c456af212f159360c7"
+    },
+    "receipts": {
+      "count": 1,
+      "sha256": "f1da1fd24fb3a8c915c3a00d1ee5db69067aa905639d022c128a677b688f0681"
+    },
+    "settings": {
+      "count": 1,
+      "sha256": "809194f50ef15485f7022b8d308188cc6ffb50b2d302b93d3720309e120688d2"
+    },
+    "schema_migrations": {
+      "count": 9,
+      "sha256": "b64a7f0da17b42d1c1a66c42fb01b550efd56cb124acff4e9367ee5e62f0628c"
+    }
+  },
+  "ledger_after": {
+    "trades": {
+      "count": 1,
+      "sha256": "8a4c0d3a73e830e3c0a4f0d2a87adcf3d7676517ebee7ea4beb7838c870138bd"
+    },
+    "cash_movements": {
+      "count": 1,
+      "sha256": "626c5eccb56a34b9fa343c130fb7ca2fd37418707e9ea0c456af212f159360c7"
+    },
+    "receipts": {
+      "count": 1,
+      "sha256": "f1da1fd24fb3a8c915c3a00d1ee5db69067aa905639d022c128a677b688f0681"
+    },
+    "settings": {
+      "count": 1,
+      "sha256": "809194f50ef15485f7022b8d308188cc6ffb50b2d302b93d3720309e120688d2"
+    },
+    "schema_migrations": {
+      "count": 9,
+      "sha256": "b64a7f0da17b42d1c1a66c42fb01b550efd56cb124acff4e9367ee5e62f0628c"
+    }
+  },
+  "ledger_unchanged": true,
+  "changed_sources": [],
+  "findings": [
+    {
+      "code": "A01",
+      "priority": "ALTA",
+      "title": "Autopiloto no instalado",
+      "evidence": "Consulta Windows sin ninguna tarea GBM_Forward_*. Los logs muestran ejecuciones manuales, no operación diaria desatendida.",
+      "action": "Instalar las tres tareas con credenciales Windows; verificar ejecuciones reales, horarios NY y reintentos.",
+      "references": "scripts/install_autopilot_tasks.ps1:30-35; inventario del Programador adjunto"
+    },
+    {
+      "code": "A02",
+      "priority": "ALTA",
+      "title": "No hay respaldo cifrado operativo verificable",
+      "evidence": "Existe implementación AES-256-GCM, pero faltan backups/portfolio.db.aesgcm y/o manifiesto. El runtime no invoca backup antes de escribir.",
+      "action": "Programar copia consistente diaria y prueba de restauración con clave custodiada; no confundir código de backup con un backup realizado.",
+      "references": "scripts/github_backup.py:44-127; scripts/autopilot_runtime.py:292-331"
+    },
+    {
+      "code": "A03",
+      "priority": "ALTA",
+      "title": "Acierto y calibración todavía no demostrables",
+      "evidence": "78 pronósticos, 0 resueltos, 0 vencidos con gracia de 15 min. Brier real y curva de fiabilidad: N/D, no cero.",
+      "action": "Acumular sesiones futuras, resolver con cierres exactos y revisar Brier/fiabilidad por versión; conservar PRELIMINAR.",
+      "references": "zone_prediction_log; portfolio_tracker/services/zone_forward.py:351-377"
+    },
+    {
+      "code": "A05",
+      "priority": "MEDIA",
+      "title": "No cumple el objetivo de dos segundos por activo",
+      "evidence": "SMCI: frío serial 8.94s, caliente mínimo 3.52s; NVDA: frío serial 6.73s, caliente mínimo 3.21s",
+      "action": "Instrumentar tramos; memoizar indicadores por corte, descargar incremental, sacar PDF del ciclo crítico y precargar contexto. Medir p50/p95 antes de prometer SLA.",
+      "references": "scripts/autopilot_market_cache.py:45-98; app.py:171-179,1716-1740; benchmark adjunto"
+    },
+    {
+      "code": "A06",
+      "priority": "MEDIA",
+      "title": "Versión histórica e identidad no reproducibles sólo con el hash",
+      "evidence": "3 hashes de motor registrados; 0 registros coinciden con el código actual. El hash anterior no es corrupción, pero sin manifiesto de fuentes no prueba qué binarios/reglas lo generaron. forecast_sha256 incluye UUID.",
+      "action": "Archivar manifiesto por versión, dependencias, parámetros y entradas. Comparar UI/headless por contenido canónico sin id y reloj congelado; no exigir igualdad de firmas de registros diferentes.",
+      "references": "portfolio_tracker/services/zone_forward.py:23-30,156-168,220-231"
+    },
+    {
+      "code": "A07",
+      "priority": "MEDIA",
+      "title": "El aplicador de correlación confía ciegamente en el contexto",
+      "evidence": "build_cross_context sí exige correlación >0.70; apply_cross_context acepta status=available y proposed_impact=5 incluso con correlación 0.20. Reproducción en frontera pública, no evidencia de bono indebido en datos reales.",
+      "action": "Revalidar correlación finita >0.70 y corte sincronizado en el aplicador, o usar un contrato interno validado.",
+      "references": "portfolio_tracker/analytics/cross_correlation.py:181-191,205-219"
+    },
+    {
+      "code": "A08",
+      "priority": "MEDIA",
+      "title": "Recuperación no ilimitada y grupo de seis no atómico",
+      "evidence": "Cada zona se confirma en transacción separada; un corte entre zonas deja grupo parcial íntegro. Catch-up depende de descargar todas las velas 5m y el diario; el proveedor no garantiza disponibilidad intradía más allá de 60 días.",
+      "action": "Transacción única por seis zonas o estado explícito de grupo; archivar sesiones completas al cierre y resolver desde evidencia local firmada cuando el proveedor ya no las sirve.",
+      "references": "portfolio_tracker/services/zone_forward.py:245-270,289-316; https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html"
+    },
+    {
+      "code": "A09",
+      "priority": "MEDIA",
+      "title": "La prueba UI/headless existente no valida la ingesta real",
+      "evidence": "El test previo sustituye analyze_probability y usa frames None. Esta auditoría ejecuta llamadas UI extraídas del AST con datos reales y reloj compartido; no prueba estado de cuenta activo ni todas las rutas de calibración. Las descargas y cachés de los dos flujos difieren.",
+      "action": "Extraer un servicio de snapshot común con reloj, frames y memoria explícitos; añadir pruebas extremo a extremo con posiciones activas, fallos y límites de vela.",
+      "references": "tests/test_autopilot.py:170-190; app.py:1511-1632; scripts/autopilot_runtime.py:165-195"
+    },
+    {
+      "code": "A10",
+      "priority": "BAJA",
+      "title": "Observabilidad incompleta de los trabajos",
+      "evidence": "Los tres trabajos usan collector.log. No hay resolver.log/catchup.log, duración estructurada por símbolo ni evidencia de un ciclo completo 11:00/17:00/09:05. Las mediciones históricas son de precisión de un segundo.",
+      "action": "Añadir job_id, tiempos por etapa, resumen de pendientes/vencidos y heartbeat; mantener log unificado si se documenta y puede filtrarse.",
+      "references": "scripts/autopilot_runtime.py:41-62,294-333; logs/collector.log"
+    }
+  ],
+  "verdict": "RECHAZADO"
+}

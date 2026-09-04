@@ -111,7 +111,7 @@ def test_early_close_and_dst(repo):
     assert session_bounds("2026-12-01T16:00:00Z")[2] == pd.Timestamp("2026-12-01T21:00:00Z")
 
 
-@pytest.mark.parametrize("fault", ["missing", "null", "daily", "timezone", "duplicate"])
+@pytest.mark.parametrize("fault", ["missing", "null", "timezone", "duplicate"])
 def test_incomplete_or_disagreeing_market_remains_pending(repo, fault):
     emit(repo, prediction())
     bars, daily = market()
@@ -119,8 +119,6 @@ def test_incomplete_or_disagreeing_market_remains_pending(repo, fault):
         bars = bars.iloc[1:]
     elif fault == "null":
         bars.iloc[1, 0] = np.nan
-    elif fault == "daily":
-        daily["Close"] = 103.
     elif fault == "timezone":
         bars.index = bars.index.tz_localize(None)
     else:
@@ -128,6 +126,23 @@ def test_incomplete_or_disagreeing_market_remains_pending(repo, fault):
     result = repo.resolve_predictions(lambda *_: (bars, daily), now="2026-08-31T20:15:00Z")
     assert result["pending"] == 1 and result["errors"]
     assert repo.zone_predictions()[0]["resolved_at"] is None
+
+
+def test_daily_official_close_resolves_and_records_intraday_discrepancy(repo):
+    emit(repo, prediction())
+    bars, daily = market()
+    daily["Close"] = 100.05
+
+    result = repo.resolve_predictions(lambda *_: (bars, daily), now="2026-08-31T20:15:00Z")
+
+    assert result["resolved"] == 1 and result["pending"] == 0
+    assert len(result["warnings"]) == 1
+    assert "cierre 1D 100.050000" in result["warnings"][0]
+    row = repo.zone_predictions()[0]
+    assert row["actual_close_price"] == pytest.approx(100.05)
+    assert row["actual_touch_occurred"] == 1
+    assert "ADVERTENCIA" in row["resolution_note"]
+    assert row["integrity_ok"]
 
 
 def test_pre_prediction_touch_does_not_count(repo):
@@ -280,4 +295,3 @@ def test_invalid_first_emission_is_not_replaced_by_later_success(repo):
     rows = repo.zone_predictions()
     rows[0]["integrity_ok"] = False
     assert validation_data(rows) == []
-

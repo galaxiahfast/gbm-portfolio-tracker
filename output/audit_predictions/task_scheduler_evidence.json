@@ -1,0 +1,7 @@
+{
+  "checked_at": "2026-09-03; consulta de solo lectura durante esta auditoria",
+  "returncode": 0,
+  "tasks": [],
+  "error": "",
+  "source": "Get-ScheduledTask ejecutado con permisos de lectura elevados. Filtro GBM|backup|portfolio: solo tareas Microsoft/Windows MareBackup, AppListBackup, CloudRestore y RegIdleBackup; ninguna GBM_Forward_Collector, GBM_Forward_Resolver ni GBM_Forward_Catchup. No se modificaron tareas."
+}

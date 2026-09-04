@@ -141,6 +141,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", type=Path, default=Path("data/portfolio.db"))
     parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--encrypt", action="store_true",
+        help="Compatibilidad explícita: el respaldo siempre se cifra con AES-256-GCM.",
+    )
     parser.add_argument("--stage", action="store_true", help="Prepara los tres archivos seguros en Git.")
     parser.add_argument("--commit", action="store_true")
     parser.add_argument("--push", action="store_true")

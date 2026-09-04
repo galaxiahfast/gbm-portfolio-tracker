@@ -1,0 +1,72 @@
+[
+  {
+    "name": "Red desconectada (inyección controlada)",
+    "passed": true,
+    "exit_code": 1,
+    "detail": "Fallo inyectado en proveedor; continúa ambos símbolos; salida controlada 1 para reintento.",
+    "log": "2026-09-03 13:13:22 EDT - ERROR - SMCI: error de colección; se continúa con los demás activos\nTraceback (most recent call last):\n  File \"C:\\Users\\MOISES INFORMATICA\\Desktop\\STOCK\\scripts\\autopilot_runtime.py\", line 234, in collect\n    intraday, daily = cache.frames(symbol, now_fn())\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1134, in __call__\n    return self._mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1138, in _mock_call\n    return self._execute_mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1193, in _execute_mock_call\n    raise effect\nConnectionError: AUDIT simulated network outage\n2026-09-03 13:13:22 EDT - ERROR - NVDA: error de colección; se continúa con los demás activos\nTraceback (most recent call last):\n  File \"C:\\Users\\MOISES INFORMATICA\\Desktop\\STOCK\\scripts\\autopilot_runtime.py\", line 234, in collect\n    intraday, daily = cache.frames(symbol, now_fn())\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1134, in __call__\n    return self._mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1138, in _mock_call\n    return self._execute_mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1193, in _execute_mock_call\n    raise effect\n  File \"C:\\Users\\MOISES INFORMATICA\\Desktop\\STOCK\\scripts\\autopilot_runtime.py\", line 234, in collect\n    intraday, daily = cache.frames(symbol, now_fn())\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1134, in __call__\n    return self._mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1138, in _mock_call\n    return self._execute_mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Python312\\Lib\\unittest\\mock.py\", line 1193, in _execute_mock_call\n    raise effect\nConnectionError: AUDIT simulated network outage\n"
+  },
+  {
+    "name": "Resolvedor antes del cierre",
+    "passed": true,
+    "detail": "15:00 NY: no consulta cierre futuro y conserva pendiente."
+  },
+  {
+    "name": "Catch-up multiactivo, atrasos e idempotencia",
+    "passed": true,
+    "detail": "Dos activos, dos sesiones atrasadas; resuelve 4 registros. Segundo arranque: cero descargas adicionales.",
+    "calls": [
+      [
+        "NVDA",
+        "2026-08-27"
+      ],
+      [
+        "SMCI",
+        "2026-08-27"
+      ],
+      [
+        "NVDA",
+        "2026-08-28"
+      ],
+      [
+        "SMCI",
+        "2026-08-28"
+      ]
+    ]
+  },
+  {
+    "name": "Terminación abrupta durante transacción SQLite",
+    "passed": true,
+    "detail": "Proceso hijo termina sin finally/rollback: commit previo persiste; transacción abierta desaparece. No equivale a corte eléctrico físico.",
+    "child_exit": 79,
+    "integrity": "ok",
+    "committed": 1,
+    "uncommitted": 0
+  },
+  {
+    "name": "Umbral 0.70 revalidado en apply_cross_context",
+    "passed": false,
+    "detail": "Prueba de defensa de la función de aplicación; el constructor normal sí filtra >0.70, pero se comprueba también la frontera pública.",
+    "values": [
+      {
+        "correlation": 0.2,
+        "applied": 5.0
+      },
+      {
+        "correlation": 0.7,
+        "applied": 5.0
+      },
+      {
+        "correlation": 0.71,
+        "applied": 5.0
+      }
+    ]
+  },
+  {
+    "name": "Equivalencia semántica frente a identidad SHA-256",
+    "passed": true,
+    "detail": "Mismo contenido da UUID y forecast_sha256 diferentes por diseño. Comparar contenido canónico sin id, no firmas de registros distintos.",
+    "same_forecast_sha256": false,
+    "same_content": true
+  }
+]

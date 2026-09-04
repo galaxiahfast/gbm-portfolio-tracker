@@ -2,9 +2,11 @@ from dataclasses import replace
 from io import BytesIO
 
 import pytest
+import pandas as pd
 from pypdf import PdfReader
 
 from portfolio_tracker.analytics.zone_reach import ReachEstimate
+from portfolio_tracker.analytics.conditional_zone_reach import calculate_dynamic_visual_zone
 from portfolio_tracker.services.price_zones import build_zone_snapshot
 from portfolio_tracker.services.pdf_report import (
     build_executive_report, build_technical_report, build_probability_report, build_master_report,
@@ -43,3 +45,48 @@ def test_unavailable_pdf_does_not_fabricate_probabilities():
     text = '\n'.join(p.extract_text() for p in PdfReader(BytesIO(payload)).pages)
     assert text.count('Probabilidad estimada de alcance hoy: N/D') == 6
     assert 'Fuera de sesión' in text
+
+
+def test_pdf_displays_dynamic_classification_without_changing_frozen_snapshot():
+    analysis, frozen = snapshot_fixture()
+    pairs = tuple((zone, 'BELOW') for zone in frozen.buys) + tuple(
+        (zone, 'ABOVE') for zone in frozen.sales
+    )
+    assessments = calculate_dynamic_visual_zone(
+        analysis.buy_levels.take_profit_1 + 1,
+        '2026-09-03T17:40:00Z',
+        '2026-09-03T20:00:00Z',
+        pairs,
+        original_estimates=frozen.estimates,
+    )
+    dynamic = replace(
+        frozen,
+        evaluated_at=pd.Timestamp('2026-09-03T17:40:00Z'),
+        buys=tuple(replace(z, label=a.label) for z, a in zip(frozen.buys, assessments[:3])),
+        sales=tuple(replace(z, label=a.label) for z, a in zip(frozen.sales, assessments[3:])),
+        estimates=tuple(a.estimate for a in assessments),
+    )
+    text = '\n'.join(
+        page.extract_text() or ''
+        for page in PdfReader(BytesIO(build_executive_report(analysis, zone_snapshot=dynamic))).pages
+    )
+    assert 'Superado' in text and 'Soporte inmediato' in text
+    assert 'Estimación visual preliminar' in text
+    assert frozen.estimates[3].probability == 5
+
+
+def test_pdf_shows_closed_market_and_visual_extended_levels():
+    analysis, snapshot = snapshot_fixture()
+    ceiling = max(zone.high for zone in snapshot.sales if zone.high is not None)
+    analysis = replace(analysis, last_price=ceiling + 5)
+    snapshot = build_zone_snapshot(analysis, now='2026-09-03T22:00:00Z')
+    text = '\n'.join(
+        page.extract_text() or ''
+        for page in PdfReader(BytesIO(build_executive_report(analysis, zone_snapshot=snapshot))).pages
+    )
+    assert 'MERCADO CERRADO' in text
+    assert 'Niveles extendidos (Proyectados)' in text
+    assert text.count('Proyectado') >= 2
+    for level in snapshot.extended_levels:
+        assert f'${level.price:,.2f}' in text
+    assert 'no se guardan en el registro forward' in text

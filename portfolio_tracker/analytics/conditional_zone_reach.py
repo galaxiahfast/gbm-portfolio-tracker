@@ -4,11 +4,23 @@ This is an uncalibrated conditional model estimate, not established predictive
 accuracy. No account access, fitted optimism, random paths or generic fallback.
 """
 import math
+from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
 from portfolio_tracker.analytics.closed_bars import NY, _calendar, utc
 from portfolio_tracker.analytics.zone_reach import ReachEstimate
+
+
+@dataclass(frozen=True)
+class DynamicZoneAssessment:
+    """Read-only description of one original level at the current 5m cut."""
+
+    label: str
+    classification: str
+    warning: str | None
+    estimate: ReachEstimate
+    minutes_remaining: int
 
 
 def _daily_context(daily):
@@ -94,8 +106,16 @@ eventual close. Equal-length complete regular sessions only, one vote per day.
     if min_sessions < 2:
         raise ValueError('min_sessions must be >= 2')
     def missing(status, n=0, detail=''):
-        return tuple(ReachEstimate(None, n, None, None, status, close_direction=z[2],
-                                   model=model, detail=detail) for z in zones)
+        return tuple(ReachEstimate(
+            None, n, 0.0, 0.0, status,
+            close_probability=None,
+            close_lower=0.0,
+            close_upper=0.0,
+            close_direction=z[2],
+            model=model,
+            detail=detail,
+            confidence_available=False,
+        ) for z in zones)
     now = utc(now)
     day = pd.Timestamp(now.tz_convert(NY).date())
     schedule = _calendar(day.year-5, day.year+1).schedule
@@ -197,7 +217,14 @@ eventual close. Equal-length complete regular sessions only, one vote per day.
     results = []
     for low, high, direction in zones:
         if low is None or high is None or not (math.isfinite(low) and math.isfinite(high)) or not 0 < low <= high or direction not in ('BELOW','ABOVE'):
-            results.append(ReachEstimate(None,n,None,None,'Sin nivel válido', model=model, detail=detail))
+            results.append(ReachEstimate(
+                None, n, 0.0, 0.0, 'Sin nivel válido',
+                close_lower=0.0,
+                close_upper=0.0,
+                model=model,
+                detail=detail,
+                confidence_available=False,
+            ))
             continue
         lo, hi = math.log(low/price), math.log(high/price)
         touch = 1. if low <= price <= high else float(np.dot(weights, lows <= hi) if price > high else np.dot(weights, highs >= lo))
@@ -209,4 +236,133 @@ eventual close. Equal-length complete regular sessions only, one vote per day.
                   if matching == 'weighted' else 'Estimación condicionada + ATR; no calibrada OOS')
         results.append(ReachEstimate(100*touch,n,lower,upper,
             status,100*close,clower,cupper, direction,model,detail,effective))
+    return tuple(results)
+
+
+def calculate_dynamic_visual_zone(
+    current_price,
+    reference_time,
+    market_close_time,
+    original_zones,
+    *,
+    intraday=None,
+    daily=None,
+    original_estimates=None,
+    min_sessions=12,
+):
+    """Reclassify and conservatively re-estimate frozen zones for display only.
+
+    ``original_zones`` contains ``(zone, BELOW|ABOVE)`` pairs. When complete
+    OHLC history is supplied, the main same-clock/regime/ATR estimator is used
+    from the latest closed 5m bar. The result is additionally capped by the
+    fraction of the regular session still available relative to the original
+    forecast. This cap is deliberately conservative and preliminary.
+
+    The function is pure: it has no repository argument and cannot persist or
+    alter the frozen forward observation.
+    """
+    pairs = tuple(original_zones)
+    originals = tuple(original_estimates or ())
+    now = utc(reference_time)
+    close = utc(market_close_time)
+    remaining = max(0, int((close - now).total_seconds() // 60))
+    # Exchange-calendar early closes are already reflected by ``close`` in the
+    # empirical estimator. The requested preliminary decay uses the regular
+    # 390-minute session denominator and is intentionally disclosed as such.
+    time_fraction = min(1.0, max(0.0, remaining / 390.0))
+
+    levels = []
+    for item in pairs:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise ValueError("Cada zona debe incluir el nivel y su dirección BELOW/ABOVE.")
+        zone, direction = item
+        levels.append((getattr(zone, "low", None), getattr(zone, "high", None), direction))
+
+    conditional = ()
+    if intraday is not None and daily is not None:
+        conditional = estimate_conditional_reach(
+            intraday, daily, current_price, levels, now=now,
+            matching="weighted", min_sessions=min_sessions,
+        )
+
+    def bounded(value):
+        if value is None:
+            return None
+        value = float(value)
+        return min(100.0, max(0.0, value)) if math.isfinite(value) else None
+
+    try:
+        display_price = float(current_price)
+    except (TypeError, ValueError):
+        display_price = math.nan
+
+    results = []
+    for index, ((zone, direction), level) in enumerate(zip(pairs, levels)):
+        low, high, _ = level
+        original = originals[index] if index < len(originals) else None
+        live = conditional[index] if index < len(conditional) else None
+        original_touch = bounded(getattr(original, "probability", None))
+        original_close = bounded(getattr(original, "close_probability", None))
+        live_touch = bounded(getattr(live, "probability", None))
+        live_close = bounded(getattr(live, "close_probability", None))
+
+        touch_cap = None if original_touch is None else original_touch * time_fraction
+        close_cap = None if original_close is None else original_close * time_fraction
+        touch = live_touch if touch_cap is None else touch_cap if live_touch is None else min(live_touch, touch_cap)
+        close_probability = live_close if close_cap is None else close_cap if live_close is None else min(live_close, close_cap)
+        samples = int(getattr(live, "samples", 0) or getattr(original, "samples", 0) or 0)
+        effective = getattr(live, "effective_samples", None)
+        if effective is None:
+            effective = getattr(original, "effective_samples", None)
+        interval_n = float(effective or samples or 0)
+        lower = upper = close_lower = close_upper = 0.0
+        confidence_available = False
+        if touch is not None and interval_n >= 2:
+            lower, upper = _interval(touch / 100, interval_n)
+        if close_probability is not None and interval_n >= 2:
+            close_lower, close_upper = _interval(close_probability / 100, interval_n)
+        confidence_available = (
+            touch is not None
+            and close_probability is not None
+            and interval_n >= 2
+        )
+
+        valid_level = all(v is not None and math.isfinite(float(v)) and float(v) > 0 for v in (low, high))
+        if not valid_level or not math.isfinite(display_price) or display_price <= 0:
+            classification = "Nivel no disponible"
+            distance_pct = None
+        elif display_price > high:
+            classification = "Superado (Soporte)" if direction == "ABOVE" else "Soporte / Zona de retroceso"
+            distance_pct = (high - display_price) / display_price * 100
+        elif display_price < low:
+            classification = "Objetivo activo" if direction == "ABOVE" else "Nivel por encima del precio"
+            distance_pct = (low - display_price) / display_price * 100
+        else:
+            classification = "Precio en zona"
+            distance_pct = 0.0
+
+        unlikely = ((touch is not None and touch < 5.0)
+                    or (distance_pct is not None and abs(distance_pct) > 5.0))
+        warning = "Poco probable en el tiempo restante" if unlikely else None
+        base_label = str(getattr(zone, "label", "Zona"))
+        short_name = base_label.split(" · ", 1)[0]
+        if classification == "Superado (Soporte)":
+            label = f"{short_name} (Superado) - Soporte inmediato"
+        elif warning:
+            label = f"{base_label} - {classification} (Poco probable hoy)"
+        else:
+            label = f"{base_label} - {classification}"
+        status = "Estimación visual preliminar desde el corte actual; no se persiste ni recalibra el forward"
+        if warning:
+            status += f"; {warning}"
+        detail = (
+            f"{remaining} min restantes; factor temporal conservador {time_fraction:.1%}; "
+            f"clasificación: {classification}"
+        )
+        estimate = ReachEstimate(
+            touch, samples, lower, upper, status,
+            close_probability, close_lower, close_upper, direction,
+            "dynamic-visual-v1", detail, effective, confidence_available,
+        )
+        results.append(DynamicZoneAssessment(label, classification, warning, estimate, remaining))
     return tuple(results)

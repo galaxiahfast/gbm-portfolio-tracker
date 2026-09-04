@@ -10,6 +10,7 @@ from portfolio_tracker.analytics import technical_probability as technical
 from portfolio_tracker.analytics.technical_validity import (
     TechnicalDataVeto, current_indicator_suffix, validate_freshness,
 )
+from portfolio_tracker.analytics.closed_bars import select_last_closed_bar
 from tests.test_causal_replay import dataset
 
 
@@ -129,3 +130,20 @@ def test_exchange_freshness_handles_early_close_weekend_and_missing_last_bar():
         validate_freshness(intraday,daily,'2026-11-30T14:31:00Z')
     with pytest.raises(TechnicalDataVeto,match='diario'):
         validate_freshness(intraday,clock_frame('2026-11-25'),'2026-11-27T18:00:00Z')
+
+
+def test_after_hours_keeps_the_last_closed_5m_session_for_charts():
+    index = pd.date_range('2026-09-03T13:30:00Z', periods=78, freq='5min')
+    frame = pd.DataFrame(
+        {
+            'Open': np.linspace(100, 101, len(index)),
+            'High': np.linspace(100.2, 101.2, len(index)),
+            'Low': np.linspace(99.8, 100.8, len(index)),
+            'Close': np.linspace(100.1, 101.1, len(index)),
+            'Volume': np.full(len(index), 1000),
+        },
+        index=index,
+    )
+    closed = select_last_closed_bar(frame, '5m', '2026-09-03T23:00:00Z')
+    assert len(closed) == 78
+    assert closed.index[-1] == pd.Timestamp('2026-09-03T19:55:00Z')

@@ -79,9 +79,16 @@ CREATE TABLE live_model_observations (
     outcome_up INTEGER,
     successful INTEGER,
     resolved_at TEXT,
-    created_at TEXT NOT NULL,
+    created_at TEXT NOT NULL, integrity_version INTEGER NOT NULL DEFAULT 1, available_at TEXT, source_bar_at TEXT, horizon_policy TEXT, resolution_status TEXT NOT NULL DEFAULT 'LEGACY_UNVERIFIED', outcome_bar_at TEXT, outcome_source TEXT, resolution_sha256 TEXT,
     UNIQUE(symbol, observed_at, horizon_minutes)
 );
+
+CREATE TABLE operational_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL, payload_json TEXT NOT NULL,
+            previous_sha256 TEXT NOT NULL, sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
 
 CREATE TABLE portfolio_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -171,6 +178,33 @@ CREATE TABLE trades (
                 NOT NULL DEFAULT 'GROSS'
                 CHECK (reported_total_type IN ('GROSS', 'SETTLEMENT')));
 
+CREATE TABLE zone_daily_validation (
+            sha256 TEXT PRIMARY KEY, session_date TEXT NOT NULL,
+            symbol TEXT NOT NULL, model_version_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL, payload_json TEXT NOT NULL);
+
+CREATE TABLE zone_market_evidence (
+            sha256 TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+
+CREATE TABLE zone_prediction_log (
+            id TEXT PRIMARY KEY, symbol TEXT NOT NULL,
+            timestamp_prediction TEXT NOT NULL, source_bar_closed_at TEXT NOT NULL,
+            session_date TEXT NOT NULL, expires_at TEXT NOT NULL,
+            zone_key TEXT NOT NULL, zone_type TEXT NOT NULL,
+            zone_price REAL NOT NULL, zone_low REAL NOT NULL, zone_high REAL NOT NULL,
+            reference_price REAL NOT NULL,
+            predicted_touch_probability REAL NOT NULL CHECK(predicted_touch_probability BETWEEN 0 AND 1),
+            predicted_close_above_probability REAL,
+            predicted_close_probability REAL, close_direction TEXT NOT NULL,
+            timeframe TEXT NOT NULL, model_version_hash TEXT NOT NULL, model_name TEXT NOT NULL,
+            context_json TEXT NOT NULL, touch_eligible INTEGER NOT NULL,
+            forecast_sha256 TEXT NOT NULL,
+            actual_touch_occurred INTEGER, actual_close_price REAL,
+            actual_close_relation TEXT, resolved_at TEXT, resolution_note TEXT,
+            evidence_sha256 TEXT, resolution_sha256 TEXT,
+            UNIQUE(symbol, model_version_hash, source_bar_closed_at, zone_key)
+        );
+
 CREATE INDEX idx_audit_runs_time
             ON audit_runs(created_at DESC)
             ;
@@ -190,6 +224,11 @@ CREATE INDEX idx_fx_pair_time
 CREATE INDEX idx_live_model_symbol_time
     ON live_model_observations(symbol, observed_at DESC);
 
+CREATE INDEX idx_live_pending_maturity
+            ON live_model_observations(symbol, resolution_status, available_at);
+
+CREATE INDEX idx_operational_symbol ON operational_events(symbol, id);
+
 CREATE INDEX idx_portfolio_snapshots_time
     ON portfolio_snapshots(observed_at DESC);
 
@@ -198,6 +237,22 @@ CREATE INDEX idx_prices_symbol_time
 
 CREATE INDEX idx_trades_symbol_time
     ON trades(symbol, executed_at, id);
+
+CREATE INDEX ix_zone_pending ON zone_prediction_log(resolved_at, expires_at);
+
+CREATE TRIGGER live_forecast_immutable
+            BEFORE UPDATE ON live_model_observations
+            WHEN OLD.integrity_version = 2 AND (NEW.symbol IS NOT OLD.symbol OR NEW.observed_at IS NOT OLD.observed_at OR NEW.available_at IS NOT OLD.available_at OR NEW.horizon_minutes IS NOT OLD.horizon_minutes OR NEW.reference_price IS NOT OLD.reference_price OR NEW.raw_probability_up IS NOT OLD.raw_probability_up OR NEW.predicted_direction IS NOT OLD.predicted_direction OR NEW.parameters_json IS NOT OLD.parameters_json OR NEW.source_bar_at IS NOT OLD.source_bar_at OR NEW.horizon_policy IS NOT OLD.horizon_policy OR NEW.integrity_version IS NOT OLD.integrity_version OR NEW.created_at IS NOT OLD.created_at OR NEW.observation_sha256 IS NOT OLD.observation_sha256 OR NEW.id IS NOT OLD.id)
+            BEGIN SELECT RAISE(ABORT, 'live_forecast_immutable'); END;
+
+CREATE TRIGGER live_observation_no_delete
+            BEFORE DELETE ON live_model_observations WHEN OLD.integrity_version = 2
+            BEGIN SELECT RAISE(ABORT, 'live_observation_immutable'); END;
+
+CREATE TRIGGER live_resolution_immutable
+            BEFORE UPDATE ON live_model_observations
+            WHEN OLD.integrity_version = 2 AND OLD.resolution_status != 'PENDING'
+            BEGIN SELECT RAISE(ABORT, 'live_resolution_immutable'); END;
 
 CREATE TRIGGER prevent_duplicate_trade_receipt_insert
             BEFORE INSERT ON trades
@@ -217,3 +272,26 @@ CREATE TRIGGER prevent_duplicate_trade_receipt_update
             BEGIN
                 SELECT RAISE(ABORT, 'receipt_already_linked');
             END;
+
+CREATE TRIGGER zone_daily_validation_no_delete BEFORE DELETE ON zone_daily_validation
+                BEGIN SELECT RAISE(ABORT, 'append-only evidence'); END;
+
+CREATE TRIGGER zone_daily_validation_no_update BEFORE UPDATE ON zone_daily_validation
+                    BEGIN SELECT RAISE(ABORT, 'immutable evidence'); END;
+
+CREATE TRIGGER zone_forecast_immutable
+            BEFORE UPDATE ON zone_prediction_log WHEN NEW.id IS NOT OLD.id OR NEW.symbol IS NOT OLD.symbol OR NEW.timestamp_prediction IS NOT OLD.timestamp_prediction OR NEW.source_bar_closed_at IS NOT OLD.source_bar_closed_at OR NEW.session_date IS NOT OLD.session_date OR NEW.expires_at IS NOT OLD.expires_at OR NEW.zone_key IS NOT OLD.zone_key OR NEW.zone_type IS NOT OLD.zone_type OR NEW.zone_price IS NOT OLD.zone_price OR NEW.zone_low IS NOT OLD.zone_low OR NEW.zone_high IS NOT OLD.zone_high OR NEW.reference_price IS NOT OLD.reference_price OR NEW.predicted_touch_probability IS NOT OLD.predicted_touch_probability OR NEW.predicted_close_above_probability IS NOT OLD.predicted_close_above_probability OR NEW.predicted_close_probability IS NOT OLD.predicted_close_probability OR NEW.close_direction IS NOT OLD.close_direction OR NEW.timeframe IS NOT OLD.timeframe OR NEW.model_version_hash IS NOT OLD.model_version_hash OR NEW.model_name IS NOT OLD.model_name OR NEW.context_json IS NOT OLD.context_json OR NEW.touch_eligible IS NOT OLD.touch_eligible OR NEW.forecast_sha256 IS NOT OLD.forecast_sha256
+            BEGIN SELECT RAISE(ABORT, 'immutable zone forecast'); END;
+
+CREATE TRIGGER zone_market_evidence_no_delete BEFORE DELETE ON zone_market_evidence
+                BEGIN SELECT RAISE(ABORT, 'append-only evidence'); END;
+
+CREATE TRIGGER zone_market_evidence_no_update BEFORE UPDATE ON zone_market_evidence
+                    BEGIN SELECT RAISE(ABORT, 'immutable evidence'); END;
+
+CREATE TRIGGER zone_prediction_log_no_delete BEFORE DELETE ON zone_prediction_log
+                BEGIN SELECT RAISE(ABORT, 'append-only evidence'); END;
+
+CREATE TRIGGER zone_resolution_immutable
+            BEFORE UPDATE ON zone_prediction_log WHEN OLD.resolved_at IS NOT NULL
+            BEGIN SELECT RAISE(ABORT, 'immutable zone resolution'); END;

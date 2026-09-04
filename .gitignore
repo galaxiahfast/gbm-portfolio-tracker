@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 .pytest_cache/
+logs/
 *.py[cod]
 
 # Datos privados y persistentes: nunca deben entrar al historial de Git.

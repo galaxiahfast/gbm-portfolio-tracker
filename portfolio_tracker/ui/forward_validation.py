@@ -8,6 +8,7 @@ from ..repository import PortfolioRepository
 from ..services.forward_market import resolution_frames
 from ..services.market_data import download_daily_history
 from ..services.zone_forward import validation_data
+from ..services.cross_validation import global_validation_summary
 
 
 @st.cache_data(ttl=900, max_entries=4, show_spinner=False)
@@ -37,6 +38,16 @@ def validation_panel(repository, resolution_status):
     if bad:
         st.error(f"{bad} registros con integridad inválida: excluidos de todas las métricas.")
     valid = [row for row in rows if row["integrity_ok"]]
+    with st.expander("Aciertos globales · todas las emisoras", expanded=False):
+        summary = global_validation_summary(rows)
+        if summary:
+            st.dataframe(pd.DataFrame(summary), hide_index=True,
+                         column_config={"Frecuencia observada": st.column_config.NumberColumn(format="percent")})
+        else:
+            st.info("Sin resultados prospectivos resueltos para comparar emisoras.")
+        st.caption("GLOBAL conserva separadas las versiones y Toque/Cierre. Ocurrieron = eventos alcanzados, "
+                   "no operaciones rentables ni precisión de un clasificador. Zonas y emisoras correlacionadas "
+                   "no equivalen a muestras independientes; evidencia preliminar.")
     symbols = sorted({row["symbol"] for row in valid}) or ["SMCI"]
     symbol = st.selectbox("Emisora registrada", symbols, key="forward_symbol")
     versions = sorted({row["model_version_hash"] for row in valid if row["symbol"] == symbol})

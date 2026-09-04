@@ -212,7 +212,14 @@ def build_pdf(report, destination):
         return Paragraph(escape(text),styles[style])
     def table(rows,widths):
         cells=[[p(c,'SmallAudit') for c in row] for row in rows]
-        t=Table(cells,colWidths=[x*mm for x in widths],repeatRows=1,hAlign='LEFT')
+        t=Table(
+            cells,
+            colWidths=[x*mm for x in widths],
+            repeatRows=1,
+            hAlign='LEFT',
+            splitByRow=1,
+            splitInRow=0,
+        )
         t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#E5E7EB')),
            ('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F7F7F7')]),
            ('LINEBELOW',(0,0),(-1,0),.7,colors.grey),('BOTTOMPADDING',(0,0),(-1,-1),6),
@@ -284,7 +291,7 @@ def build_pdf(report, destination):
         canvas.drawString(18*mm,10*mm,'AUDITORÍA FASE 5 | '+report['generated_at'][:10])
         canvas.drawRightString(192*mm,10*mm,str(doc.page))
     SimpleDocTemplate(str(destination),pagesize=A4,leftMargin=18*mm,rightMargin=18*mm,
-                      topMargin=18*mm,bottomMargin=18*mm,title='Auditoría técnica - Motor cuantitativo Fase 5',
+                      topMargin=22*mm,bottomMargin=24*mm,title='Auditoría técnica - Motor cuantitativo Fase 5',
                       author='Auditoría de código local').build(story,onFirstPage=footer,onLaterPages=footer)
 
 

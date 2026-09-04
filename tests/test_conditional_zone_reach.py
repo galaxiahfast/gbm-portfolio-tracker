@@ -47,6 +47,21 @@ def test_insufficient_macro_evidence_never_falls_back_to_generic_frequency():
     assert 'insuficiente' in result.status
 
 
+def test_insufficient_sample_returns_safe_empty_confidence_interval():
+    data, now = history()
+    result = estimate_conditional_reach(
+        data,
+        daily_history().tail(15),
+        100,
+        [(101, 101, 'ABOVE')],
+        now,
+    )[0]
+    assert result.samples == 0
+    assert result.confidence_available is False
+    assert (result.lower, result.upper) == (0.0, 0.0)
+    assert (result.close_lower, result.close_upper) == (0.0, 0.0)
+
+
 def test_end_of_session_and_missing_prefix():
     data, now = history()
     daily = daily_history()

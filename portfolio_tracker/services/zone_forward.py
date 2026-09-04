@@ -223,6 +223,7 @@ def model_version_hash():
         "portfolio_tracker/services/zone_forward.py",
         "portfolio_tracker/services/price_zones.py",
         "portfolio_tracker/services/forward_market.py",
+        "portfolio_tracker/services/cross_asset.py",
     ] + [str(path.relative_to(root)).replace("\\", "/")
          for path in sorted((root / "portfolio_tracker/analytics").glob("*.py"))]
     return digest({name: sha256((root / name).read_bytes()).hexdigest() for name in names})
@@ -256,7 +257,8 @@ def log_snapshot(repository, analysis, snapshot, *, now=None):
             model_version_hash=model_version_hash(), model_name=estimate.model,
             context_json=canonical({"samples": estimate.samples, "status": estimate.status,
                                     "detail": estimate.detail, "zone_label": zone.label,
-                                    "source": zone.source, "matching": "weighted", "min_sessions": 12}),
+                                    "source": zone.source, "matching": "weighted", "min_sessions": 12,
+                                    "cross_asset": getattr(analysis, "cross_asset_context", {})}),
         )
         saved += repository.save_prediction(item, now=clock)
     return {"saved": saved, "skipped": skipped,
@@ -280,7 +282,8 @@ def resolve_predictions(database, provider, *, now=None):
     rows = read_predictions(database)
     pending = [r for r in rows if r["integrity_ok"] and r["resolved_at"] is None
                and clock >= aware(r["expires_at"]) + pd.Timedelta(minutes=15)]
-    result = {"resolved": 0, "pending": 0, "errors": [], "invalid_hashes": sum(not r["integrity_ok"] for r in rows)}
+    result = {"resolved": 0, "pending": 0, "errors": [], "warnings": [],
+              "invalid_hashes": sum(not r["integrity_ok"] for r in rows)}
     groups = {}
     for row in pending:
         groups.setdefault((row["symbol"], row["session_date"]), []).append(row)
@@ -310,8 +313,17 @@ def resolve_predictions(database, provider, *, now=None):
             last = daily_day.iloc[0]
             if not np.isfinite(last[fields].to_numpy(dtype=float)).all() or float(last.Close) <= 0:
                 raise ValueError("Cierre diario inválido.")
-            if not math.isclose(float(last.Close), float(bars.Close.iloc[-1]), rel_tol=0.0001, abs_tol=0.01):
-                raise ValueError("Cierre diario y última vela 5m discrepan; revisión pendiente.")
+            daily_close = float(last.Close)
+            intraday_close = float(bars.Close.iloc[-1])
+            close_delta = abs(daily_close - intraday_close)
+            close_warning = None
+            if close_delta > 0.01:
+                close_warning = (
+                    "Cierre diario oficial usado; última vela 5m "
+                    f"{intraday_close:.6f}, cierre 1D {daily_close:.6f}, "
+                    f"diferencia {close_delta:.6f}. Los toques conservan la sesión 5m completa."
+                )
+                result["warnings"].append(f"{symbol} {day}: {close_warning}")
             evidence = _market_payload(bars, last, symbol, clock)
             evidence_hash = digest(evidence)
             with database.transaction() as conn:
@@ -326,13 +338,16 @@ def resolve_predictions(database, provider, *, now=None):
                     hit = touched(full)
                     ambiguous = not hit and touched(partial)
                     actual = None if ambiguous or not row["touch_eligible"] else int(hit)
-                    close_price = float(last.Close)
+                    close_price = daily_close
+                    base_note = "YA ALCANZADA AL CORTE: toque excluido" if not row["touch_eligible"] else (
+                        "AMBIGUA: cruce solo en vela parcialmente anterior" if ambiguous else "RESUELTA"
+                    )
+                    resolution_note = base_note + (f" | ADVERTENCIA: {close_warning}" if close_warning else "")
                     resolution = dict(
                         actual_touch_occurred=actual, actual_close_price=close_price,
                         actual_close_relation="BELOW" if close_price < row["zone_low"] else "ABOVE" if close_price > row["zone_high"] else "INSIDE",
                         resolved_at=clock.isoformat(), evidence_sha256=evidence_hash,
-                        resolution_note="YA ALCANZADA AL CORTE: toque excluido" if not row["touch_eligible"] else
-                                        "AMBIGUA: cruce solo en vela parcialmente anterior" if ambiguous else "RESUELTA",
+                        resolution_note=resolution_note,
                     )
                     resolution_hash = digest({**resolution, "forecast_sha256": row["forecast_sha256"]})
                     updates = {**resolution, "resolution_sha256": resolution_hash}

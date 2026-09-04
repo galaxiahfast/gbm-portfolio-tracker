@@ -1,0 +1,192 @@
+[
+  {
+    "symbol": "SMCI",
+    "status": "MEDIDO",
+    "timings": {
+      "download_cold_s": 3.2517502999999124,
+      "download_warm_s": 1.0417413000004672,
+      "peer_cold_s": 0.5928535000002739,
+      "fundamental_cold_s": 2.4920908999993117,
+      "headless_compute_and_zones_s": 2.566440700000385,
+      "ui_extracted_compute_and_zones_s": 2.2729527000001326,
+      "zone_repeat_s": 0.11118439999972907,
+      "warm_lower_bound_s": 3.608182000000852,
+      "cold_serial_measured_s": 8.903135399999883
+    },
+    "as_of": "2026-09-03T17:15:24.445179+00:00",
+    "intraday_bars": 1839,
+    "daily_bars": 1254,
+    "same_zone_snapshot": true,
+    "same_forecast_content": true,
+    "headless_records": 6,
+    "ui_records": 6,
+    "hashes_equal": false,
+    "parameters": "defaults, same empty operational/account state",
+    "fundamental_available": true,
+    "correlation": {
+      "status": "available",
+      "symbol": "SMCI",
+      "peer": "NVDA",
+      "correlation": 0.5313111935288658,
+      "return_period": 20,
+      "return_samples": 20,
+      "daily_as_of": "2026-09-02",
+      "observed_at": "2026-09-03T17:15:24.445179+00:00",
+      "ratio": {
+        "value": 0.16487678533132738,
+        "mean50": 0.14983160618876665,
+        "deviation_pct": 10.041392150335703
+      },
+      "rsi14": {
+        "SMCI": 56.28414346426196,
+        "NVDA": 56.6703511878016
+      },
+      "alerts": [
+        "Diario: SMCI baja pero NVDA sube en 6 sesiones: divergencia; posible frenazo.",
+        "SMCI sube pero NVDA baja en 30 min: divergencia; posible frenazo."
+      ],
+      "intraday_as_of": "2026-09-03T17:15:00+00:00",
+      "proposed_impact": 0.0,
+      "applied_impact": 0.0,
+      "detail": "Retornos diarios cerrados; ajuste sólo del score heurístico, no de probabilidades calibradas.",
+      "daily_divergence": {
+        "alerts": [
+          "SMCI baja pero NVDA sube en 6 sesiones: divergencia; posible frenazo."
+        ],
+        "SMCI": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.6182022063127494,
+          "momentum": -0.03796149556041983
+        },
+        "NVDA": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 1.2390094077220053,
+          "momentum": 0.05332081881074546
+        }
+      },
+      "intraday": {
+        "SMCI": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.5087788504249265,
+          "momentum": 0.005483531904737493
+        },
+        "NVDA": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.5958417816871558,
+          "momentum": -0.0023486190057280254
+        }
+      },
+      "input_sha256": "780d958e692297e584e20da3e8a6d156179850804a597da9311f909f75af3430",
+      "base_score": 65.7
+    },
+    "scope": "AST de las tres llamadas reales UI; no navegador, no calibración de otros horizontes ni renderizado/PDF.",
+    "inputs_sha256": "d86fd9978981d3d7dacd9c537cb74e25f62b8a5bca5c00352031fcfbc6e7606e"
+  },
+  {
+    "symbol": "NVDA",
+    "status": "MEDIDO",
+    "timings": {
+      "download_cold_s": 1.7639044999996258,
+      "download_warm_s": 1.0651118000005226,
+      "peer_cold_s": 0.31495540000014444,
+      "fundamental_cold_s": 2.416450800000348,
+      "headless_compute_and_zones_s": 2.266048800000135,
+      "ui_extracted_compute_and_zones_s": 2.283446699999331,
+      "zone_repeat_s": 0.11081949999970675,
+      "warm_lower_bound_s": 3.3311606000006577,
+      "cold_serial_measured_s": 6.761359500000253
+    },
+    "as_of": "2026-09-03T17:15:35.420221+00:00",
+    "intraday_bars": 1839,
+    "daily_bars": 1254,
+    "same_zone_snapshot": true,
+    "same_forecast_content": true,
+    "headless_records": 6,
+    "ui_records": 6,
+    "hashes_equal": false,
+    "parameters": "defaults, same empty operational/account state",
+    "fundamental_available": true,
+    "correlation": {
+      "status": "available",
+      "symbol": "NVDA",
+      "peer": "SMCI",
+      "correlation": 0.531311193526092,
+      "return_period": 20,
+      "return_samples": 20,
+      "daily_as_of": "2026-09-02",
+      "observed_at": "2026-09-03T17:15:35.420221+00:00",
+      "ratio": {
+        "value": 0.16487678533133426,
+        "mean50": 0.1498316061887715,
+        "deviation_pct": 10.041392150336748
+      },
+      "rsi14": {
+        "NVDA": 56.67035118779059,
+        "SMCI": 56.28414346433051
+      },
+      "alerts": [
+        "Diario: NVDA sube pero SMCI baja en 6 sesiones: divergencia; posible frenazo.",
+        "NVDA baja pero SMCI sube en 30 min: divergencia; posible frenazo."
+      ],
+      "intraday_as_of": "2026-09-03T17:15:00+00:00",
+      "proposed_impact": 0.0,
+      "applied_impact": 0.0,
+      "detail": "Retornos diarios cerrados; ajuste sólo del score heurístico, no de probabilidades calibradas.",
+      "daily_divergence": {
+        "alerts": [
+          "NVDA sube pero SMCI baja en 6 sesiones: divergencia; posible frenazo."
+        ],
+        "NVDA": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 1.2390094077220053,
+          "momentum": 0.053320818810493
+        },
+        "SMCI": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.6182022063127494,
+          "momentum": -0.037961495559735936
+        }
+      },
+      "intraday": {
+        "NVDA": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.5958417816871558,
+          "momentum": -0.0023486190057280254
+        },
+        "SMCI": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.5087788504249265,
+          "momentum": 0.005483531904737493
+        }
+      },
+      "input_sha256": "780d958e692297e584e20da3e8a6d156179850804a597da9311f909f75af3430",
+      "base_score": 56.0
+    },
+    "scope": "AST de las tres llamadas reales UI; no navegador, no calibración de otros horizontes ni renderizado/PDF.",
+    "inputs_sha256": "69007e5583812ec90854b2766637f6bff15a00dcd656e9c1dce2df341a21c59b"
+  }
+]
