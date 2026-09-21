@@ -239,17 +239,19 @@ def _fundamental_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:
     return story
 
 
-def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  # type: ignore[no-untyped-def]
+def _executive_story(analysis: "ProbabilityAnalysis", styles, system_decision=None) -> list[object]:  # type: ignore[no-untyped-def]
     story: list[object] = []
 
-    decision = executive_decision(analysis)
-    decision_color = GREEN if decision.tone == "success" else RED if decision.tone == "danger" else AMBER
-    decision_box = Table(
-        [[Paragraph(decision.label, styles["Decision"])], [Paragraph(_safe_text(decision.rationale), styles["DecisionDetail"])]],
-        colWidths=[174 * mm],
-    )
-    decision_box.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), decision_color), ("BOX", (0, 0), (-1, -1), 0, decision_color), ("TOPPADDING", (0, 0), (-1, 0), 10), ("BOTTOMPADDING", (0, -1), (-1, -1), 10), ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12)]))
-    story.extend([decision_box, Spacer(1, 10), Paragraph("Resumen ejecutivo", styles["Section"])])
+    if system_decision is None:
+        decision = executive_decision(analysis)
+        decision_color = GREEN if decision.tone == "success" else RED if decision.tone == "danger" else AMBER
+        decision_box = Table(
+            [[Paragraph(decision.label, styles["Decision"])], [Paragraph(_safe_text(decision.rationale), styles["DecisionDetail"])]],
+            colWidths=[174 * mm],
+        )
+        decision_box.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), decision_color), ("BOX", (0, 0), (-1, -1), 0, decision_color), ("TOPPADDING", (0, 0), (-1, 0), 10), ("BOTTOMPADDING", (0, -1), (-1, -1), 10), ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12)]))
+        story.extend([decision_box, Spacer(1, 10)])
+    story.append(Paragraph("Resumen ejecutivo", styles["Section"]))
     story.append(Paragraph(_safe_text(f"Estado: {analysis.position_state}. Régimen mayor: {analysis.macro_permission}. {analysis.hierarchy_detail}"), styles["BodySmall"]))
     summary_rows = [
         [
@@ -402,6 +404,60 @@ def _executive_story(analysis: "ProbabilityAnalysis", styles) -> list[object]:  
         )
     )
     return story
+
+
+def _system_decision_story(decision, styles):
+    value = lambda item, pattern=".2f": "N/D" if item is None else format(float(item), pattern)
+    rows = [
+        ["Acción", "Horizonte", "Entrada", "Stop", "Objetivo"],
+        [
+            decision.action,
+            decision.horizon,
+            "N/D" if decision.entry_low is None else f"${decision.entry_low:.2f}-${decision.entry_high:.2f}",
+            "N/D" if decision.stop_loss is None else f"${decision.stop_loss:.2f}",
+            "N/D" if decision.take_profit is None else f"${decision.take_profit:.2f}",
+        ],
+        ["Acciones nuevas", "Riesgo monetario", "Valor esperado", "R:R", "Muestras"],
+        [
+            str(decision.position_size),
+            f"${decision.monetary_risk:.2f}",
+            "N/D" if decision.expected_value_total is None else f"${decision.expected_value_total:+.2f}",
+            value(decision.reward_risk),
+            str(decision.validated_sessions),
+        ],
+    ]
+    return [
+        Paragraph("DECISIÓN DEL SISTEMA", styles["Section"]),
+        Paragraph(_safe_text(decision.explanation), styles["BodySmall"]),
+        _table(rows, [34.8 * mm] * 5),
+        Paragraph(
+            _safe_text(
+                f"Capital ${decision.total_capital:.2f}; efectivo ${decision.cash_available:.2f}; "
+                f"posición actual {decision.current_shares:g}; concentración {decision.concentration:.1%}; "
+                f"Brier direccional OOS {value(decision.directional_brier, '.4f')}; "
+                f"baseline {value(decision.directional_baseline_brier, '.4f')}; "
+                f"estado {decision.calibration_status}. El Brier de zonas no interviene en la decisión. "
+                "Recomendacion informativa; ejecucion manual."
+            ),
+            styles["BodySmall"],
+        ),
+        Paragraph("Condiciones de activación LONG", styles["Section"]),
+        _table(
+            [["Condición", "Estado", "Detalle"]] + [
+                [item.label, "Sí" if item.passed else "No", item.detail]
+                for item in decision.activation_checks
+            ],
+            [52 * mm, 18 * mm, 104 * mm],
+        ),
+        Paragraph(
+            _safe_text(
+                f"Acción ahora: {decision.action}. Sesgo descriptivo: "
+                f"{decision.preliminary_bias} ({decision.preliminary_horizon})."
+            ),
+            styles["BodySmall"],
+        ),
+        Spacer(1, 6),
+    ]
 
 
 def _cross_asset_story(analysis, styles):
@@ -605,6 +661,11 @@ def _calibration_story(
             "con evidencia anterior y se compara contra Buy & Hold y cruce EMA netos.",
             styles["BodySmall"],
         ),
+        Paragraph(
+            "La realimentación agregada reúne horizontes distintos y se conserva solo como "
+            "diagnóstico operativo. No modifica señales, decisiones ni umbrales de ejecución.",
+            styles["BodySmall"],
+        ),
     ]
     payload = dict(context or {})
     online = _json_mapping(payload.get("online_stats", {}))
@@ -614,12 +675,12 @@ def _calibration_story(
             Paragraph("Realimentación progresiva", styles["ChartTitle"]),
             _table(
                 [
-                    ["Observaciones resueltas", "Acierto", "Brier binario OOS", "Umbral adaptativo"],
+                    ["Observaciones resueltas", "Acierto agregado", "Brier agregado", "Uso operativo"],
                     [
                         int(online.get("resolved", 0) or 0),
                         f"{float(online.get('accuracy', 0) or 0):.1%}",
                         (f"{float(online['brier_score']):.3f}" if online.get('brier_score') is not None else "N/D"),
-                        f"{float(online.get('adaptive_threshold', 0.55) or 0):.1%}",
+                        "DESACTIVADO",
                     ],
                 ],
                 [43.5 * mm] * 4,
@@ -784,6 +845,13 @@ def _zone_story(analysis, snapshot, styles):
     extended = tuple(getattr(snapshot, 'extended_levels', ()) or ())
     if not extended:
         extended = projected_extended_levels(analysis, snapshot)
+    sale_prices = {
+        round(value, 2)
+        for zone in snapshot.sales
+        for value in (_pdf_float(zone.low), _pdf_float(zone.high))
+        if value is not None
+    }
+    extended = tuple(level for level in extended if round(level.price, 2) not in sale_prices)
     if extended:
         heading = ('Soportes extendidos (Proyectados)'
                    if extended[0].direction == 'BELOW'
@@ -822,16 +890,19 @@ def _build_report(
     title: str,
     subject: str,
     zone_snapshot=None,
+    system_decision=None,
 ) -> bytes:
     buffer = BytesIO()
     document = _document(buffer, analysis, title, subject)
     styles = _report_styles()
     story = _report_header(analysis, title, styles)
+    if system_decision is not None:
+        story.extend(_system_decision_story(system_decision, styles))
     snapshot = zone_snapshot if zone_snapshot is not None else build_visual_zone_snapshot(analysis)
     story.extend(_zone_story(analysis, snapshot, styles))
     story.append(PageBreak())
     if include_executive:
-        story.extend(_executive_story(analysis, styles))
+        story.extend(_executive_story(analysis, styles, system_decision=system_decision))
     if include_technical:
         if include_executive:
             story.append(PageBreak())
@@ -844,7 +915,7 @@ def _build_report(
     return buffer.getvalue()
 
 
-def build_executive_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None) -> bytes:
+def build_executive_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None, system_decision=None) -> bytes:
     """Genera exclusivamente la vista ejecutiva y su proyeccion diaria."""
 
     return _build_report(
@@ -853,11 +924,12 @@ def build_executive_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=Non
         include_technical=False,
         title="Vista ejecutiva",
         zone_snapshot=zone_snapshot,
+        system_decision=system_decision,
         subject="Decision, horizontes, niveles de riesgo y proyeccion de 15 sesiones",
     )
 
 
-def build_technical_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None) -> bytes:
+def build_technical_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None, system_decision=None) -> bytes:
     """Genera exclusivamente graficas, indicadores y lectura tecnica completa."""
 
     return _build_report(
@@ -866,11 +938,12 @@ def build_technical_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=Non
         include_technical=True,
         title="Vista tecnica avanzada",
         zone_snapshot=zone_snapshot,
+        system_decision=system_decision,
         subject="Panel tecnico multi-temporal completo para auditoria",
     )
 
 
-def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None) -> bytes:
+def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None, system_decision=None) -> bytes:
     """Genera el reporte unificado con la vista ejecutiva y la tecnica."""
 
     return _build_report(
@@ -879,6 +952,7 @@ def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=N
         include_technical=True,
         title="Reporte cuantitativo completo",
         zone_snapshot=zone_snapshot,
+        system_decision=system_decision,
         subject="Resumen ejecutivo y tecnico para revision humana o por IA",
     )
 
@@ -886,7 +960,7 @@ def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=N
 def build_master_report(
     analysis: "ProbabilityAnalysis",
     calibration_context: Mapping[str, object] | None,
-    *, zone_snapshot=None,
+    *, zone_snapshot=None, system_decision=None,
 ) -> bytes:
     """Genera las tres vistas: ejecutiva, técnica y calibración auditada."""
 
@@ -898,5 +972,6 @@ def build_master_report(
         calibration_context=calibration_context,
         title="Reporte maestro cuantitativo",
         zone_snapshot=zone_snapshot,
+        system_decision=system_decision,
         subject="Vista ejecutiva, tecnica avanzada y calibracion fuera de muestra",
     )

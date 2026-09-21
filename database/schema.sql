@@ -90,6 +90,23 @@ CREATE TABLE operational_events (
             created_at TEXT NOT NULL
         );
 
+CREATE TABLE operational_model_outcomes (
+            observation_id INTEGER PRIMARY KEY REFERENCES live_model_observations(id),
+            target_version TEXT NOT NULL,
+            contract_sha256 TEXT NOT NULL,
+            resolution_status TEXT NOT NULL DEFAULT 'PENDING'
+                CHECK (resolution_status IN ('PENDING','RESOLVED')),
+            outcome TEXT CHECK (outcome IN ('TP_FIRST','SL_FIRST','TIMEOUT')),
+            exit_price TEXT,
+            exit_at TEXT,
+            exit_source TEXT,
+            evidence_sha256 TEXT,
+            evidence_json TEXT,
+            resolved_at TEXT,
+            outcome_sha256 TEXT,
+            created_at TEXT NOT NULL
+        , scanned_through TEXT, scan_evidence_sha256 TEXT, scan_evidence_count INTEGER NOT NULL DEFAULT 0, scan_evidence_json TEXT, checkpoint_updated_at TEXT, checkpoint_sha256 TEXT);
+
 CREATE TABLE portfolio_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cash_usd TEXT NOT NULL,
@@ -227,6 +244,9 @@ CREATE INDEX idx_live_model_symbol_time
 CREATE INDEX idx_live_pending_maturity
             ON live_model_observations(symbol, resolution_status, available_at);
 
+CREATE INDEX idx_operational_model_pending
+            ON operational_model_outcomes(resolution_status, observation_id);
+
 CREATE INDEX idx_operational_symbol ON operational_events(symbol, id);
 
 CREATE INDEX idx_portfolio_snapshots_time
@@ -242,17 +262,87 @@ CREATE INDEX ix_zone_pending ON zone_prediction_log(resolved_at, expires_at);
 
 CREATE TRIGGER live_forecast_immutable
             BEFORE UPDATE ON live_model_observations
-            WHEN OLD.integrity_version = 2 AND (NEW.symbol IS NOT OLD.symbol OR NEW.observed_at IS NOT OLD.observed_at OR NEW.available_at IS NOT OLD.available_at OR NEW.horizon_minutes IS NOT OLD.horizon_minutes OR NEW.reference_price IS NOT OLD.reference_price OR NEW.raw_probability_up IS NOT OLD.raw_probability_up OR NEW.predicted_direction IS NOT OLD.predicted_direction OR NEW.parameters_json IS NOT OLD.parameters_json OR NEW.source_bar_at IS NOT OLD.source_bar_at OR NEW.horizon_policy IS NOT OLD.horizon_policy OR NEW.integrity_version IS NOT OLD.integrity_version OR NEW.created_at IS NOT OLD.created_at OR NEW.observation_sha256 IS NOT OLD.observation_sha256 OR NEW.id IS NOT OLD.id)
+            WHEN OLD.integrity_version >= 2 AND (NEW.symbol IS NOT OLD.symbol OR NEW.observed_at IS NOT OLD.observed_at OR NEW.available_at IS NOT OLD.available_at OR NEW.horizon_minutes IS NOT OLD.horizon_minutes OR NEW.reference_price IS NOT OLD.reference_price OR NEW.raw_probability_up IS NOT OLD.raw_probability_up OR NEW.predicted_direction IS NOT OLD.predicted_direction OR NEW.parameters_json IS NOT OLD.parameters_json OR NEW.source_bar_at IS NOT OLD.source_bar_at OR NEW.horizon_policy IS NOT OLD.horizon_policy OR NEW.integrity_version IS NOT OLD.integrity_version OR NEW.created_at IS NOT OLD.created_at OR NEW.observation_sha256 IS NOT OLD.observation_sha256 OR NEW.id IS NOT OLD.id)
             BEGIN SELECT RAISE(ABORT, 'live_forecast_immutable'); END;
 
 CREATE TRIGGER live_observation_no_delete
-            BEFORE DELETE ON live_model_observations WHEN OLD.integrity_version = 2
+            BEFORE DELETE ON live_model_observations WHEN OLD.integrity_version >= 2
             BEGIN SELECT RAISE(ABORT, 'live_observation_immutable'); END;
 
 CREATE TRIGGER live_resolution_immutable
             BEFORE UPDATE ON live_model_observations
-            WHEN OLD.integrity_version = 2 AND OLD.resolution_status != 'PENDING'
+            WHEN OLD.integrity_version >= 2 AND OLD.resolution_status != 'PENDING'
             BEGIN SELECT RAISE(ABORT, 'live_resolution_immutable'); END;
+
+CREATE TRIGGER operational_model_contract_immutable
+            BEFORE UPDATE ON operational_model_outcomes WHEN NEW.observation_id IS NOT OLD.observation_id OR NEW.target_version IS NOT OLD.target_version OR NEW.contract_sha256 IS NOT OLD.contract_sha256 OR NEW.created_at IS NOT OLD.created_at
+            BEGIN SELECT RAISE(ABORT, 'operational_model_contract_immutable'); END;
+
+CREATE TRIGGER operational_model_insert_complete
+            BEFORE INSERT ON operational_model_outcomes
+            WHEN NOT (
+                (NEW.resolution_status='PENDING' AND NEW.outcome IS NULL
+                 AND NEW.exit_price IS NULL AND NEW.exit_at IS NULL
+                 AND NEW.exit_source IS NULL AND NEW.evidence_sha256 IS NULL
+                 AND NEW.evidence_json IS NULL AND NEW.resolved_at IS NULL
+                 AND NEW.outcome_sha256 IS NULL
+                 AND NEW.scanned_through IS NULL
+                 AND NEW.scan_evidence_sha256 IS NULL
+                 AND NEW.scan_evidence_count=0
+                 AND NEW.scan_evidence_json IS NULL
+                 AND NEW.checkpoint_updated_at IS NULL
+                 AND NEW.checkpoint_sha256 IS NULL)
+            )
+            BEGIN SELECT RAISE(ABORT, 'operational_model_insert_incomplete'); END;
+
+CREATE TRIGGER operational_model_no_delete
+            BEFORE DELETE ON operational_model_outcomes
+            BEGIN SELECT RAISE(ABORT, 'operational_model_outcome_immutable'); END;
+
+CREATE TRIGGER operational_model_resolution_complete
+            BEFORE UPDATE ON operational_model_outcomes
+            WHEN NOT (
+                (NEW.resolution_status='PENDING' AND NEW.outcome IS NULL
+                 AND NEW.exit_price IS NULL AND NEW.exit_at IS NULL
+                 AND NEW.exit_source IS NULL AND NEW.evidence_sha256 IS NULL
+                 AND NEW.evidence_json IS NULL AND NEW.resolved_at IS NULL
+                 AND NEW.outcome_sha256 IS NULL
+                 AND (
+                    (NEW.scan_evidence_count=0
+                     AND NEW.scanned_through IS NULL
+                     AND NEW.scan_evidence_sha256 IS NULL
+                     AND NEW.scan_evidence_json IS NULL
+                     AND NEW.checkpoint_updated_at IS NULL
+                     AND NEW.checkpoint_sha256 IS NULL)
+                    OR
+                    (NEW.scan_evidence_count>0
+                     AND NEW.scanned_through IS NOT NULL
+                     AND NEW.scan_evidence_sha256 IS NOT NULL
+                     AND NEW.scan_evidence_json IS NOT NULL
+                     AND NEW.checkpoint_updated_at IS NOT NULL
+                     AND NEW.checkpoint_sha256 IS NOT NULL)
+                 ))
+                OR
+                (NEW.resolution_status='RESOLVED' AND NEW.outcome IS NOT NULL
+                 AND NEW.exit_price IS NOT NULL AND NEW.exit_at IS NOT NULL
+                 AND NEW.exit_source IS NOT NULL AND NEW.evidence_sha256 IS NOT NULL
+                 AND NEW.evidence_json IS NOT NULL AND NEW.resolved_at IS NOT NULL
+                 AND NEW.outcome_sha256 IS NOT NULL
+                 AND NEW.scan_evidence_count>0
+                 AND NEW.scanned_through IS NOT NULL
+                 AND NEW.scan_evidence_sha256 IS NOT NULL
+                 AND NEW.scan_evidence_json IS NOT NULL
+                 AND NEW.checkpoint_updated_at IS NOT NULL
+                 AND NEW.checkpoint_sha256 IS NOT NULL
+                 AND NEW.evidence_sha256=NEW.scan_evidence_sha256
+                 AND NEW.evidence_json=NEW.scan_evidence_json)
+            )
+            BEGIN SELECT RAISE(ABORT, 'operational_model_resolution_incomplete'); END;
+
+CREATE TRIGGER operational_model_resolution_immutable
+            BEFORE UPDATE ON operational_model_outcomes
+            WHEN OLD.resolution_status != 'PENDING'
+            BEGIN SELECT RAISE(ABORT, 'operational_model_resolution_immutable'); END;
 
 CREATE TRIGGER prevent_duplicate_trade_receipt_insert
             BEFORE INSERT ON trades

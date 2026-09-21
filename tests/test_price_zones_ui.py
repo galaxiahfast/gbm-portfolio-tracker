@@ -8,7 +8,11 @@ from streamlit.testing.v1 import AppTest
 
 from portfolio_tracker.ui.price_zones import DisplayZone, build_zone_lists, distance_to_zone, price_location
 from portfolio_tracker.ui.theme import PREMIUM_CSS
-from portfolio_tracker.ui.price_zones import render_price_zones
+from portfolio_tracker.ui.price_zones import (
+    _operational_levels,
+    render_operational_signal,
+    render_price_zones,
+)
 from portfolio_tracker.analytics.conditional_zone_reach import calculate_dynamic_visual_zone
 from portfolio_tracker.analytics.zone_reach import ReachEstimate
 from portfolio_tracker.services.price_zones import (
@@ -170,6 +174,65 @@ def test_visual_snapshot_is_read_only_and_app_does_not_log_it():
     app_source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     assert "log_snapshot(repository, analysis, zone_snapshot)" not in app_source
     assert "build_visual_zone_snapshot(analysis, repository=repository)" in app_source
+
+
+def test_open_session_operational_map_moves_after_old_targets_are_crossed():
+    analysis = _analysis()
+    analysis = replace(
+        analysis,
+        last_price=40.57,
+        buy_levels=replace(
+            analysis.buy_levels,
+            entry_low=39.08,
+            entry_high=39.15,
+            take_profit_1=40.17,
+            take_profit_2=40.35,
+        ),
+    )
+    frozen = build_zone_snapshot(analysis, now="2026-09-04T15:00:00Z")
+    before = pickle.dumps(frozen)
+
+    live = build_visual_zone_snapshot(
+        analysis,
+        now="2026-09-04T16:25:00Z",
+        original_snapshot=frozen,
+    )
+
+    assert len(live.buys) == len(live.sales) == 3
+    assert all(zone.high < analysis.last_price for zone in live.buys)
+    assert all(zone.low > analysis.last_price for zone in live.sales)
+    assert [round(zone.low, 2) for zone in live.buys[:2]] == [40.35, 40.17]
+    assert "soporte potencial" in live.buys[0].source
+    assert pickle.dumps(frozen) == before
+
+
+def test_operational_signal_answers_buy_sell_wait_and_enforces_minimum_rr():
+    analysis = _analysis()
+    snapshot = build_zone_snapshot(analysis, now="2026-09-04T16:25:00Z")
+    levels = _operational_levels(analysis, snapshot)
+    assert levels is not None and levels[-1] >= 1.5
+
+    app = AppTest.from_string('''
+from tests.test_pdf_report import _analysis
+from portfolio_tracker.services.price_zones import build_zone_snapshot
+from portfolio_tracker.ui.price_zones import render_operational_signal
+a = _analysis()
+s = build_zone_snapshot(a, now="2026-09-04T16:25:00Z")
+render_operational_signal(a, s)
+''', default_timeout=30).run()
+
+    assert not app.exception
+    text = "\n".join(item.value for item in app.markdown)
+    text += "\n" + "\n".join(item.value for item in app.warning)
+    assert "SEÑAL ACTUAL:" in text
+    assert "Gatillo vigente:" in text
+    assert "R:R" in text
+    metrics = {item.label for item in app.metric}
+    assert metrics == {
+        "Subida · próximas 6 horas",
+        "Rango · próximas 6 horas",
+        "Bajada · próximas 6 horas",
+    }
 
 
 def test_closed_market_preserves_frozen_zone_classification_and_next_cut():

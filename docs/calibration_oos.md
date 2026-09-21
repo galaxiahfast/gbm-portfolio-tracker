@@ -30,6 +30,13 @@ la UI no vuelve a recortar ni redistribuir sus componentes. Brier multiclase
 se define como media de la suma de tres errores cuadrados, rango [0,2]. El
 Brier binario [0,1] de compatibilidad es una métrica diferente.
 
+Este contrato calibra exclusivamente el cierre `UP / RANGE / DOWN`. El objetivo
+operativo `TP_FIRST / SL_FIRST / TIMEOUT` añadido al corte automático es una
+cohorte distinta: depende del orden de la trayectoria y no puede deducirse del
+cierre. Mientras no tenga su propia división cronológica, tamaño mínimo y Brier
+holdout, su probabilidad se reporta como `N/D`, no como score recalibrado ni como
+complemento de la probabilidad direccional.
+
 La identidad del modelo incluye activo, horizonte, parámetros, revisión del
 código y versión del evento. El contrato y las bandas congeladas están dentro
 del JSON firmado de la observación. Las consultas verifican ambos hashes,

@@ -41,7 +41,7 @@ MILESTONES = (
     ImplementationMilestone("Detector de patrones chartistas y ondas", "Pivotes Zig-Zag, dobles/triples extremos, rupturas y estructuras impulso/ABC con veto objetivo.", "complete", 1.0),
     ImplementationMilestone("Análisis fundamental y noticias", "Estados financieros, eventos, flujo informativo versionado, ponderación direccional y veto SHA-256.", "complete", 1.0),
     ImplementationMilestone("Calibración estadística y backtesting", "Búsqueda anidada de parámetros, OOS intacto, ATR, costes, error Brier, veto de capital y huella auditable.", "complete", 1.5),
-    ImplementationMilestone("Realimentación progresiva intradía", "Observaciones únicas cada cinco minutos, resolución a una sesión, umbral adaptativo y SHA-256.", "complete", 1.0),
+    ImplementationMilestone("Realimentación progresiva intradía", "Observaciones versionadas, resolución por sesiones XNYS, diagnóstico agregado no operativo y SHA-256.", "complete", 1.0),
 )
 
 

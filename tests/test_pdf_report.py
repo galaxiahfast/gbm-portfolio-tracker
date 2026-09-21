@@ -120,7 +120,8 @@ def test_master_pdf_adds_audited_calibration_as_third_view() -> None:
             "resolved": 8,
             "accuracy": 0.625,
             "brier_score": 0.21,
-            "adaptive_threshold": 0.56,
+            "decision_eligible": False,
+            "scope": "AGGREGATE_DIAGNOSTIC_ONLY",
         },
         "backtest_run": {
             "id": 7,
@@ -148,6 +149,8 @@ def test_master_pdf_adds_audited_calibration_as_third_view() -> None:
     assert "Calibración y backtesting" in text
     assert "Integridad SHA-256" in text
     assert "VALIDA" in text
+    assert "DESACTIVADO" in text
+    assert "Umbral adaptativo" not in text
 
 
 def test_technical_pdf_contains_every_advanced_chart() -> None:

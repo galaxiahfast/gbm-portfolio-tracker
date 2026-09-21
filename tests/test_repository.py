@@ -61,7 +61,7 @@ def test_migrations_adopt_existing_database_and_recreate_missing_table(tmp_path)
 
     database = Database(path)
     database.initialize()
-    assert database.schema_version() == 9
+    assert database.schema_version() == 12
     with database.connect() as connection:
         columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(trades)")
@@ -171,7 +171,9 @@ def test_live_model_feedback_is_unique_resolved_and_hash_audited(tmp_path) -> No
     assert resolved == 1
     assert stats["resolved"] == 1
     assert stats["accuracy"] == 1.0
-    assert 0.52 <= stats["adaptive_threshold"] <= 0.65
+    assert stats["decision_eligible"] is False
+    assert stats["scope"] == "AGGREGATE_DIAGNOSTIC_ONLY"
+    assert "adaptive_threshold" not in stats
     assert valid == 1
     assert invalid == ()
     assert repository.live_model_calibration_samples("SMCI", horizon_minutes=60) == ((0.62, 1),)

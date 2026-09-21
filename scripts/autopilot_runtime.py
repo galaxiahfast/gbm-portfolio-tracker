@@ -121,17 +121,36 @@ def allowed(job, now, scheduled=False):
 
 def open_repository(path):
     """Never run Database.initialize(): existing ledger/schema must already exist."""
-    from portfolio_tracker.db import Database
+    from portfolio_tracker.db import Database, MIGRATIONS
     from portfolio_tracker.repository import PortfolioRepository
     path = Path(path).resolve()
     if not path.is_file():
         raise ValueError(f"Base existente no encontrada: {path}. No se creará otro portafolio.")
     connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
     try:
-        required = {"trades", "operational_events", "backtest_runs", "fundamental_news_snapshots"}
+        required = {"trades", "operational_events", "backtest_runs", "fundamental_news_snapshots",
+                    "live_model_observations", "operational_model_outcomes"}
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if required - tables:
             raise ValueError(f"Falta estructura existente: {sorted(required-tables)}. Iniciar/migrar con el flujo habitual.")
+        schema_version = connection.execute(
+            "SELECT COALESCE(MAX(version),0) FROM schema_migrations"
+        ).fetchone()[0]
+        required_version = max(version for version, _ in MIGRATIONS)
+        checkpoint_columns = {
+            "scanned_through", "scan_evidence_sha256", "scan_evidence_count",
+            "scan_evidence_json", "checkpoint_updated_at", "checkpoint_sha256",
+        }
+        stored_columns = {
+            row[1] for row in connection.execute(
+                "PRAGMA table_info(operational_model_outcomes)"
+            )
+        }
+        if schema_version < required_version or checkpoint_columns - stored_columns:
+            raise ValueError(
+                f"Esquema analítico v{schema_version} incompleto; "
+                f"se requiere v{required_version}. Iniciar/migrar con el flujo habitual."
+            )
     finally:
         connection.close()
     repository = PortfolioRepository(Database(path))
@@ -167,8 +186,8 @@ def fundamental_context(repository, symbol, log):
 def analyze_headless(repository, symbol, intraday, daily, fundamental, fundamental_hash, now, log):
     """Exact dependencies of build_zone_snapshot in app.py, not a second quant model.
 
-    Horizon multiclass calibration and live-horizon observation writes are omitted:
-    neither supplies the six zone bounds/touch/close estimates.
+    Live-horizon observations are emitted separately by the fixed 11 NY
+    collector, not by this analytic function or a Streamlit rerun.
     Operational memory is shared with UI; synchronize_position only writes
     operational_events and NEVER creates fills/orders/cash movements.
     """
@@ -213,6 +232,8 @@ def completed_group(repository, symbol, day, earliest=None):
 
 
 def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=clock):
+    from portfolio_tracker.analytics.backtesting import ENGINE_VERSION
+    from portfolio_tracker.services.directional_collection import record_fixed_directional
     from portfolio_tracker.services.price_zones import build_zone_snapshot
     from portfolio_tracker.services.zone_forward import log_snapshot
     from scripts.autopilot_market_cache import MarketCache
@@ -229,29 +250,41 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
             # suppress it. Manual runs use a daily cohort, still idempotent.
             earliest = (datetime.combine(now.astimezone(NY).date(), time(11), NY)
                         if now.astimezone(NY).time() >= time(11) else None)
-            if completed_group(repository, symbol, day, earliest):
-                log.info("%s: ya hay seis zonas íntegras de hoy; sin duplicar", symbol)
-                continue
+            zones_done = completed_group(repository, symbol, day, earliest)
             fundamental, fundamental_hash = fundamental_context(repository, symbol, log)
             intraday, daily = cache.frames(symbol, now_fn())
+            input_artifacts = cache.artifact_refs(symbol)
             analysis = analyze_headless(repository, symbol, intraday, daily,
                                         fundamental, fundamental_hash, now_fn(), log)
-            # Freeze at real emission, not 11:00 if execution arrived late.
-            snapshot = build_zone_snapshot(analysis, now=now_fn())
             if not allowed("collect", now_fn(), scheduled):
                 raise ValueError("Terminó la ventana antes de emitir; no se guardan pronósticos tardíos.")
-            result = log_snapshot(repository, analysis, snapshot, now=now_fn())
-            log.info("%s: predicción guardada. %s zonas. %s", symbol, result["saved"], result["reason"])
-            if not completed_group(repository, symbol, day, earliest):
-                failed = True
-                log.warning("%s: recolección incompleta; no se inventan zonas o porcentajes N/D", symbol)
+            emitted_at = now_fn()
+            if time(11) <= emitted_at.astimezone(NY).time() < time(11, 20):
+                parameters = repository.latest_backtest_parameters(symbol=symbol, engine_version=ENGINE_VERSION) or {
+                    "minimum_probability": .55, "stop_atr_multiple": 2.25, "risk_per_trade_pct": 1.,
+                }
+                saved = record_fixed_directional(
+                    repository, analysis, parameters, emitted_at,
+                    input_artifacts=input_artifacts,
+                )
+                log.info("%s: corte direccional 11 NY: %s/6 observaciones nuevas; sin duplicados", symbol, saved)
+            if not zones_done:
+                # Freeze at actual emission; never pretend a delayed run was 11:00.
+                snapshot = build_zone_snapshot(analysis, now=now_fn())
+                result = log_snapshot(repository, analysis, snapshot, now=now_fn())
+                log.info("%s: predicción guardada. %s zonas. %s", symbol, result["saved"], result["reason"])
+                if not completed_group(repository, symbol, day, earliest):
+                    failed = True
+                    log.warning("%s: recolección incompleta; no se inventan zonas o porcentajes N/D", symbol)
+            else:
+                log.info("%s: ya hay seis zonas íntegras de hoy; sin duplicar", symbol)
         except Exception:
             failed = True
             log.exception("%s: error de colección; se continúa con los demás activos", symbol)
     return 1 if failed else 0
 
 
-def resolve(repository, symbols, log, *, catchup=False, now=None):
+def resolve(repository, symbols, log, *, catchup=False, now=None, state_dir=None):
     from portfolio_tracker.services.forward_market import resolution_frames
     now = now or clock()
     rows = repository.zone_predictions()
@@ -276,18 +309,47 @@ def resolve(repository, symbols, log, *, catchup=False, now=None):
     if not pending:
         log.info("%s: no hay sesiones vencidas pendientes; %s registros aún no vencen; sin cambios",
                  "Catch-up" if catchup else "Resolución", len(unresolved))
-        return 1 if invalid else 0
-    # Existing API resolves only due groups. At boot no current-day group is
-    # due. A manual catch-up after close may also resolve today's overdue rows.
-    result = repository.resolve_predictions(provider, now=now)
-    for warning in result.get("warnings", []):
-        log.warning("%s", warning)
-    for error in result["errors"]:
-        errors.append(error)
-        log.error("%s", error)
-    log.info("Resolución: %s registros resueltos; %s pendientes; %s firmas inválidas",
-             result["resolved"], result["pending"], result["invalid_hashes"])
-    return 1 if errors or result["invalid_hashes"] else 0
+    else:
+        # Existing zone resolver still uses its own exact historical provider.
+        result = repository.resolve_predictions(provider, now=now)
+        for warning in result.get("warnings", []):
+            log.warning("%s", warning)
+        for error in result["errors"]:
+            errors.append(error)
+            log.error("%s", error)
+        log.info("Resolución: %s registros resueltos; %s pendientes; %s firmas inválidas",
+                 result["resolved"], result["pending"], result["invalid_hashes"])
+        invalid += result["invalid_hashes"]
+    # Directional horizons are a separate signed table. Resolve even when no
+    # zone prediction exists; never substitute the current spot price.
+    due_symbols = repository.pending_live_model_symbols(now)
+    operational_symbols = repository.pending_operational_model_symbols(now)
+    model_symbols = tuple(dict.fromkeys((*due_symbols, *operational_symbols)))
+    if model_symbols:
+        from scripts.autopilot_market_cache import MarketCache
+        from portfolio_tracker.config import DATA_DIR
+        cache = MarketCache(Path(state_dir or DATA_DIR / "autopilot") / "market")
+        for symbol in model_symbols:
+            try:
+                intraday, daily = cache.frames(symbol, now)
+                evidence_artifacts = cache.artifact_refs(symbol)
+                directional = (repository.resolve_live_model_observations(
+                    symbol=symbol, historical_bars=intraday,
+                    historical_daily_bars=daily, current_as_of=now,
+                ) if symbol in due_symbols else 0)
+                operational = repository.resolve_operational_model_outcomes(
+                    symbol=symbol, historical_bars=intraday,
+                    historical_daily_bars=daily, current_as_of=now,
+                    evidence_artifacts=evidence_artifacts,
+                )
+                log.info(
+                    "%s: %s cierres direccionales; %s resultados operativos TP/SL/timeout",
+                    symbol, directional, operational,
+                )
+            except Exception as exc:
+                errors.append(f"{symbol}: resolución direccional pendiente: {exc}")
+                log.exception("%s: resolución direccional pendiente; se reintentará", symbol)
+    return 1 if errors or invalid else 0
 
 
 def cli(job):
@@ -321,7 +383,8 @@ def cli(job):
             repository = open_repository(database)
             if job == "collect":
                 return collect(repository, symbols, state_dir, log, scheduled=args.scheduled)
-            return resolve(repository, symbols, log, catchup=job == "catchup", now=now)
+            return resolve(repository, symbols, log, catchup=job == "catchup", now=now,
+                           state_dir=state_dir)
     except (BlockingIOError, PermissionError) as exc:
         log.error("No se adquirió acceso/lock: %s; reintento seguro", exc)
         return 1

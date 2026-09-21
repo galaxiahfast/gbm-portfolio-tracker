@@ -162,6 +162,19 @@ def test_repository_model_isolation_frozen_labels_and_asof(repo):
     assert repo.verify_live_model_observations() == (3,())
 
 
+def test_repository_uses_one_scenario_sample_per_ny_session(repo):
+    repo.ensure_initial_capital()
+    contract = make_scenario_contract('SMCI', horizon(), 60, {'atr': 2})
+    add_observation(repo, AT, contract)
+    add_observation(repo, AT + timedelta(minutes=5), contract)
+    samples = repo.live_scenario_calibration_samples(
+        'SMCI', horizon_minutes=60, model_id=contract['model_id'],
+        as_of=AT + timedelta(days=1),
+    )
+    assert len(samples) == 1
+    assert samples[0].observed_at == AT
+
+
 def test_repository_rejects_tampered_multiclass_result(repo):
     contract = make_scenario_contract('SMCI',horizon(),60,{})
     add_observation(repo,AT,contract)

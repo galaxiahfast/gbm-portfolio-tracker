@@ -102,6 +102,114 @@ def _render_list(zones, price, estimates):
         st.caption(str(zone.source or "Sin procedencia disponible"))
 
 
+def _operational_action(analysis):
+    """Translate existing engine state into one unambiguous UI action."""
+    if analysis.position_state == "EXIT_PENDING":
+        return "VENDER / PROTEGER CAPITAL", "danger", "La posición abierta tiene una salida pendiente."
+    if analysis.position_state != "FLAT":
+        return "GESTIONAR POSICIÓN ABIERTA", "warning", (
+            "No abrir otra entrada por ruido de 5 minutos; gestionar stop, objetivo e invalidación estructural."
+        )
+    if analysis.risk_veto or analysis.signal_rejected:
+        reason = analysis.risk_reasons[0] if analysis.risk_reasons else analysis.verdict
+        return "NO COMPRAR · ESPERAR", "danger", str(reason)
+    if (
+        analysis.signal.value == "BUY"
+        and analysis.activation_trigger_met
+        and analysis.operation_probability >= 65
+        and not analysis.long_entry_blocked
+    ):
+        return "COMPRA AUTORIZADA POR EL MOTOR", "success", (
+            f"Gatillo cerrado y score operativo {analysis.operation_probability:.1f}/100."
+        )
+    if (
+        analysis.signal.value == "SELL"
+        and analysis.activation_trigger_met
+        and analysis.operation_probability >= 65
+    ):
+        return "VENDER / NO ABRIR LONG", "danger", (
+            f"Gatillo bajista cerrado y score operativo {analysis.operation_probability:.1f}/100."
+        )
+    return "ESPERAR · SIN ENTRADA AUTORIZADA", "warning", (
+        "El precio puede moverse, pero el gatillo completo del motor todavía no autoriza una operación."
+    )
+
+
+def _operational_levels(analysis, snapshot):
+    """Risk-aware visual plan based on current adaptive zones; never persisted."""
+    price = _positive(analysis.last_price)
+    atr = _positive(analysis.atr_5m)
+    if price is None or atr is None or not snapshot.buys or not snapshot.sales:
+        return None
+    entry_zone = snapshot.buys[0]
+    entry_low, entry_high = _positive(entry_zone.low), _positive(entry_zone.high)
+    if entry_low is None or entry_high is None:
+        return None
+    stop_candidates = [entry_low - 2.25 * atr]
+    if len(snapshot.buys) > 1 and _positive(snapshot.buys[1].low) is not None:
+        stop_candidates.append(float(snapshot.buys[1].low) - 0.25 * atr)
+    stop = max(0.01, min(stop_candidates))
+    risk = max(entry_high - stop, 0.01)
+    minimum_target = entry_high + 1.5 * risk
+    technical_targets = sorted({
+        float(zone.low) for zone in snapshot.sales
+        if _positive(zone.low) is not None and float(zone.low) >= minimum_target
+    })
+    target = technical_targets[0] if technical_targets else minimum_target
+    reward_risk = (target - entry_high) / risk
+    return entry_low, entry_high, stop, target, reward_risk
+
+
+def render_operational_signal(analysis: "ProbabilityAnalysis", zone_snapshot) -> None:
+    """Put the buy/sell/wait decision before secondary touch probabilities."""
+    if zone_snapshot is None:
+        zone_snapshot = build_zone_snapshot(analysis)
+    action, tone, reason = _operational_action(analysis)
+    horizon = next(
+        (item for item in analysis.horizon_projections if item.label == "6 Horas"),
+        analysis.horizon_projections[0] if analysis.horizon_projections else None,
+    )
+    with st.container(border=True, key="quant_operational_signal"):
+        if tone == "success":
+            st.success(f"**SEÑAL ACTUAL: {action}**  \n{reason}", icon=":material/check_circle:")
+        elif tone == "danger":
+            st.error(f"**SEÑAL ACTUAL: {action}**  \n{reason}", icon=":material/block:")
+        else:
+            st.warning(f"**SEÑAL ACTUAL: {action}**  \n{reason}", icon=":material/schedule:")
+        if horizon is not None:
+            suffix = "%" if analysis.has_empirical_probability else "/100"
+            columns = st.columns(3, gap="small")
+            columns[0].metric(
+                "Subida · próximas 6 horas",
+                f"{horizon.probability_up:.1f}{suffix}",
+                help=analysis.calibration_disclosure,
+            )
+            columns[1].metric(
+                "Rango · próximas 6 horas",
+                f"{horizon.probability_range:.1f}{suffix}",
+                help=analysis.calibration_disclosure,
+            )
+            columns[2].metric(
+                "Bajada · próximas 6 horas",
+                f"{horizon.probability_down:.1f}{suffix}",
+                help=analysis.calibration_disclosure,
+            )
+        levels = _operational_levels(analysis, zone_snapshot)
+        if levels is not None:
+            entry_low, entry_high, stop, target, reward_risk = levels
+            st.markdown(
+                f"**Plan LONG condicionado:** comprar únicamente después de que se cumpla el gatillo, "
+                f"en `${entry_low:,.2f}–{entry_high:,.2f}` · stop `${stop:,.2f}` · "
+                f"objetivo técnico mínimo `${target:,.2f}` · R:R `{reward_risk:.2f}`."
+            )
+        st.markdown(f"**Gatillo vigente:** {analysis.activation_trigger}")
+        st.caption(
+            f"Estado: {'CUMPLIDO' if analysis.activation_trigger_met else 'PENDIENTE'} · "
+            f"Régimen: {analysis.macro_permission} · Exposición relativa: {analysis.exposure_factor:.2f}x. "
+            "Las lecturas son preliminares mientras no exista calibración OOS suficiente."
+        )
+
+
 def render_price_zones(analysis: "ProbabilityAnalysis", zone_snapshot=None) -> None:
     """Shared presentation with read-only reach estimates; no execution writes."""
     snapshot = zone_snapshot if zone_snapshot is not None else build_zone_snapshot(analysis)
@@ -135,6 +243,13 @@ def render_price_zones(analysis: "ProbabilityAnalysis", zone_snapshot=None) -> N
         extended = tuple(getattr(snapshot, "extended_levels", ()) or ())
         if not extended:
             extended = projected_extended_levels(analysis, snapshot)
+        sale_prices = {
+            round(value, 2)
+            for zone in sales
+            for value in (_positive(zone.low), _positive(zone.high))
+            if value is not None
+        }
+        extended = tuple(level for level in extended if round(level.price, 2) not in sale_prices)
         if extended:
             heading = (
                 "Soportes extendidos (Proyectados)"

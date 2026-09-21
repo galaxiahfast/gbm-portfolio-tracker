@@ -5,6 +5,7 @@ param(
     [switch]$Preview,
     [switch]$Unattended,
     [switch]$Replace,
+    [switch]$CollectorOnly,
     [string[]]$Symbols = @("SMCI", "NVDA")
 )
 $ErrorActionPreference = "Stop"
@@ -32,6 +33,9 @@ $taskDefinitions = @(
     @{ Name = "GBM_Forward_Catchup"; Script = "boot_catchup.py"; Hours = @("13:05:00", "14:05:00"); Arguments = "--scheduled --symbols " + ($Symbols -join " ") },
     @{ Name = "GBM_Backup_Daily"; Script = "github_backup.py"; Hours = @("22:00:00", "23:00:00"); Arguments = "--encrypt" }
 )
+if ($CollectorOnly) {
+    $taskDefinitions = @($taskDefinitions | Where-Object { $_.Name -eq "GBM_Forward_Collector" })
+}
 $generated = @()
 foreach ($definition in $taskDefinitions) {
     $triggerXml = ""
@@ -112,7 +116,11 @@ foreach ($item in $generated) {
         $registration.Remove("Password")
     }
 }
-Write-Output "Installed. Collector 11:00 NY; resolver 17:00 NY; catch-up 09:05 NY + boot/logon; backup 18:00 NY."
+if ($CollectorOnly) {
+    Write-Output "Installed collector only: 11:00 NY, SMCI/NVDA, six signed directional horizons plus zones."
+} else {
+    Write-Output "Installed. Collector 11:00 NY; resolver 17:00 NY; catch-up 09:05 NY + boot/logon; backup 18:00 NY."
+}
 if (-not $Unattended) { Write-Output "Interactive mode: the Windows user must be logged on. Use -Unattended for real boot execution." }
 Write-Output "No task can start a powered-off PC. StartWhenAvailable recovers a missed backup after the next logon."
 Write-Output "See logs\collector.log, logs\resolver.log, logs\catchup.log and Task Scheduler history."

@@ -4,15 +4,20 @@ Implementado el 3 de septiembre de 2026. No ejecuta operaciones de trading.
 
 ## Estado operativo y límite estadístico
 
-El autopiloto está **OPERATIVO EN MODO RECOLECCIÓN**. La resolución conserva las velas
-de 5 minutos completas para evaluar toques y utiliza el cierre diario oficial para el
-resultado de cierre. Si ambas fuentes difieren más de USD 0.01, no se descarta la sesión:
-se guardan las dos cifras, la diferencia y una advertencia firmada en la resolución.
+El autopiloto está **OPERATIVO EN MODO RECOLECCIÓN Y RESOLUCIÓN**. Además del
+forward de seis zonas y del cierre direccional, cada corte fijo de las 11:00 NY
+congela un objetivo operativo independiente: `TP_FIRST / SL_FIRST / TIMEOUT`.
+La fuente primaria para el orden de barreras son velas de 5 minutos completas;
+el cierre direccional conserva su contrato separado.
 
-Los resultados siguen siendo preliminares. **Se requieren al menos 30 sesiones
-independientes por activo y versión para declarar calibración OOS concluyente.** Una fila
-por zona no equivale a una sesión independiente, y una zona alcanzada antes del corte se
-excluye del Brier de toque en lugar de imputarse artificialmente como acierto o fallo.
+Los resultados siguen siendo preliminares. **La nueva etiqueta operativa no tiene
+todavía probabilidades calibradas.** `UP / RANGE / DOWN` y `TP_FIRST /
+SL_FIRST / TIMEOUT` son objetivos diferentes y no comparten calibrador. La
+probabilidad operativa permanece `N/D` hasta que exista muestra suficiente,
+partición cronológica de calibración/holdout y evaluación Brier OOS por activo,
+horizonte y versión. Una fila por zona no equivale a una sesión independiente,
+y una zona alcanzada antes del corte se excluye del Brier de toque en lugar de
+imputarse artificialmente como acierto o fallo.
 
 ## Activación (una sola vez)
 
@@ -56,9 +61,9 @@ En Windows PowerShell, para pasar la lista correctamente desde una sesión Power
 
 | Tarea | Hora principal NY | Script | Función |
 |---|---|---|---|
-| GBM_Forward_Collector | L–V 11:00 | daily_auto_collector.py | Calcula y registra las seis zonas disponibles por activo |
-| GBM_Forward_Resolver | L–V 17:00 | auto_resolver.py | Resuelve todos los registros vencidos |
-| GBM_Forward_Catchup | L–V 09:05 + arranque con demora 5 min | boot_catchup.py | Recupera pendientes, incluso de varios días atrás |
+| GBM_Forward_Collector | L–V 11:00 | daily_auto_collector.py | Registra seis zonas y seis contratos de horizonte, incluido el objetivo operativo first-passage |
+| GBM_Forward_Resolver | L–V 17:00 | auto_resolver.py | Resuelve zonas, cierres direccionales y TP/SL/timeout con evidencia histórica |
+| GBM_Forward_Catchup | L–V 09:05 + arranque con demora 5 min | boot_catchup.py | Recupera pendientes de los tres flujos, incluso de varios días atrás |
 | GBM_Backup_Daily | L–V 18:00 | github_backup.py --encrypt | Crea instantánea SQLite consistente y cifrada; si la PC está apagada, StartWhenAvailable la recupera al siguiente inicio |
 
 Activos iniciales: **SMCI y NVDA**. Los resolutores también recuperan símbolos retirados de la lista si aún tienen evidencia pendiente.
@@ -110,6 +115,11 @@ La ruta headless reutiliza:
 - build_zone_snapshot y log_snapshot, exactamente los adaptadores que usa el flujo UI/PDF;
 - el mismo resolutor firmado de forward testing.
 
+En el corte fijo también congela, por cada horizonte, el lado del plan, precio
+de referencia, TP1, stop, timeout XNYS, revisión del etiquetador y políticas de
+ejecución. Este contrato sirve para **medir** el plan hipotético; no abre ni
+gestiona una orden real.
+
 No genera PDFs ni gráficos; no importa Streamlit. La calibración multiclase de horizontes no se repite porque **no alimenta los niveles ni las probabilidades de toque/cierre de las seis zonas**. No se omiten el filtro fundamental ni el plan persistente que sí afectan esos niveles.
 
 Como en la UI, se pueden añadir eventos analíticos en operational_events y cortes en fundamental_news_snapshots. **No se añaden órdenes, compras, ventas ni movimientos de efectivo.** No se ejecuta Database.initialize ni se fuerza una migración del libro.
@@ -126,6 +136,36 @@ Datos:
 - Un fallo de un activo no impide procesar el siguiente.
 - Resolver usa precios históricos de cada sesión; nunca la apertura de hoy para resolver ayer.
 - Algunos toques pueden quedar ambiguos aunque el cierre ya esté resuelto. No se falsifica actual_touch_occurred para borrar los NULL.
+
+### Resolución del objetivo operativo
+
+- Empieza en la primera vela 5m cuya apertura es igual a
+  `ceil(observed_at, 5m)`. La vela parcialmente formada durante la emisión queda
+  fuera del resultado.
+- Exige cobertura 5m completa de cada tramo XNYS inspeccionado. Una sesión
+  incompleta permanece pendiente.
+- Para una sesión futura ya cerrada puede usar OHLC diario como fallback
+  conservador; nunca usa la vela diaria de la sesión de emisión.
+- En un gap adverso liquida el stop al precio real de apertura. En un gap
+  favorable limita la salida al TP congelado.
+- Si TP y SL caben en la misma vela y no se conoce su orden intrabar, registra
+  `SL_FIRST`. La misma política se aplica al fallback diario.
+- `TIMEOUT` requiere el cierre histórico exacto del vencimiento. No se sustituye
+  con spot, última vela disponible ni apertura de la sesión siguiente.
+- La resolución firma tanto el contenido OHLCV inspeccionado como las
+  referencias a los archivos de evidencia. Si faltan o no son verificables,
+  no se fabrica una etiqueta.
+- Si no hay barrera, la migración analítica 12 guarda un checkpoint firmado
+  (`scanned_through`, conteo y hash encadenado). El siguiente resolver continúa
+  únicamente con barras nuevas; esto evita que 1M/6M dependan del límite de un
+  mes de la caché 5m. Un checkpoint alterado queda excluido por integridad.
+- El recorrido OHLCV se calcula sin mantener `BEGIN IMMEDIATE`; SQLite solo se
+  bloquea durante el commit compare-and-swap del checkpoint o resultado.
+
+La tabla analítica `operational_model_outcomes` es aditiva y no pertenece al
+libro contable. Sus contratos y resoluciones son inmutables. El autopiloto no
+deriva una supuesta probabilidad TP/SL desde los scores direccionales; muestra
+`N/D` hasta que la cohorte first-passage tenga calibración OOS propia.
 
 Los archivos **logs/collector.log**, **logs/resolver.log** y **logs/catchup.log** se rotan a 2 MB, con cinco copias cada uno. Logs y datos locales están ignorados por Git. Ni los registros forward ni los archivos de caché son prueba de calibración por sí solos.
 

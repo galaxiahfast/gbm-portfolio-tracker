@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import sqlite3
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .config import INITIAL_CAPITAL_USD
 from .db import Database
@@ -655,6 +656,35 @@ class PortfolioRepository:
         source_bar_at denotes the source bar CLOSE, not its open label.
         available_at is the immutable target close, never a later spot quote.
         """
+        from .services.model_observations import VERSION
+        row = self._live_observation_row(
+            symbol=symbol, observed_at=observed_at, source_bar_at=source_bar_at,
+            reference_price=reference_price, raw_probability_up=raw_probability_up,
+            parameters_json=parameters_json, horizon_minutes=horizon_minutes,
+        )
+        with self.database.transaction() as connection:
+            # Reruns must not manufacture independent samples from the same bar.
+            duplicate = connection.execute(
+                """SELECT 1 FROM live_model_observations
+                   WHERE symbol=? AND source_bar_at=? AND horizon_minutes=?
+                     AND integrity_version=? LIMIT 1""",
+                (row["symbol"], row["source_bar_at"], horizon_minutes, VERSION),
+            ).fetchone()
+            if duplicate:
+                return False
+            names = tuple(row)
+            connection.execute(
+                f"INSERT INTO live_model_observations({','.join(names)}) VALUES ({','.join('?' for _ in names)})",
+                tuple(row[name] for name in names),
+            )
+        return True
+
+    @staticmethod
+    def _live_observation_row(
+        *, symbol: str, observed_at: datetime, source_bar_at: datetime,
+        reference_price: Decimal, raw_probability_up: Decimal,
+        parameters_json: str, horizon_minutes: int,
+    ) -> dict[str, Any]:
         from .services.model_observations import (
             VERSION, POLICY, maturity, utc_timestamp, is_regular_close,
             forecast_digest, canonical,
@@ -684,22 +714,471 @@ class PortfolioRepository:
         )
         row["observation_sha256"] = forecast_digest(row)
         row["resolution_status"] = "PENDING"
+        return row
+
+    def record_fixed_live_observations(
+        self, *, symbol: str, observed_at: datetime, source_bar_at: datetime,
+        reference_price: Decimal, forecasts: list[dict[str, Any]],
+        session_date: str, protocol: str,
+    ) -> int:
+        """Atomic fixed-session cohort. A retry never adds a second 11 NY sample."""
+        from .services.model_observations import VERSION, canonical, valid_observation
+        from .services.directional_collection import HORIZON_MINUTES
+        from .services.model_execution_record import execution_id
+        from .analytics.operational_target import (
+            TARGET_VERSION, validate_operational_contract, valid_operational_outcome,
+        )
+        if len(forecasts) != len(HORIZON_MINUTES) or {
+            int(item["horizon_minutes"]) for item in forecasts
+        } != set(HORIZON_MINUTES.values()):
+            raise ValueError("El corte direccional necesita seis horizontes únicos.")
+        rows = [self._live_observation_row(
+            symbol=symbol, observed_at=observed_at, source_bar_at=source_bar_at,
+            reference_price=reference_price,
+            raw_probability_up=item["raw_probability_up"],
+            parameters_json=item["parameters_json"],
+            horizon_minutes=item["horizon_minutes"],
+        ) for item in forecasts]
+        metadata = [json.loads(row["parameters_json"]) for row in rows]
+        if any(item.get("collection_protocol") != protocol
+               or item.get("session_date") != session_date for item in metadata):
+            raise ValueError("El protocolo y la sesión del lote no coinciden.")
+        replay = metadata[0].get("replay")
+        if (not isinstance(replay, dict)
+                or replay.get("run_id") != execution_id(symbol, session_date, protocol)
+                or replay.get("observed_at") != rows[0]["observed_at"]
+                or replay.get("source_bar_closed_at") != rows[0]["source_bar_at"]
+                or any(canonical(item.get("replay")) != canonical(replay) for item in metadata)):
+            raise ValueError("El snapshot reproducible del lote no coincide.")
+        for row, item in zip(rows, metadata):
+            operational = item.get("operational_contract")
+            validate_operational_contract(operational)
+            if (item.get("primary_validation_target") != TARGET_VERSION
+                    or operational["model"]["symbol"] != row["symbol"]
+                    or operational["model"]["horizon_minutes"] != row["horizon_minutes"]
+                    or operational["observed_at"] != row["observed_at"]
+                    or operational["entry_at"] != row["source_bar_at"]
+                    or abs(float(operational["entry_price"]) - float(row["reference_price"])) > 1e-9):
+                raise ValueError("El objetivo operativo no coincide con la observación firmada.")
         with self.database.transaction() as connection:
-            # Reruns must not manufacture independent samples from the same bar.
-            duplicate = connection.execute(
+            prior = connection.execute(
+                """SELECT * FROM live_model_observations
+                   WHERE symbol=? AND integrity_version=?
+                     AND CASE WHEN json_valid(parameters_json)
+                         THEN json_extract(parameters_json, '$.collection_protocol') END=?
+                     AND CASE WHEN json_valid(parameters_json)
+                         THEN json_extract(parameters_json, '$.session_date') END=?""",
+                (symbol.strip().upper(), VERSION, protocol, session_date),
+            ).fetchall()
+            if prior:
+                ids = [int(item["id"]) for item in prior]
+                placeholders = ",".join("?" for _ in ids)
+                children = connection.execute(
+                    f"SELECT * FROM operational_model_outcomes WHERE observation_id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                parents = {int(item["id"]): item for item in prior}
+                if len(prior) == len(rows) and {
+                    int(item["horizon_minutes"]) for item in prior
+                } == set(HORIZON_MINUTES.values()) and all(valid_observation(item) for item in prior) \
+                        and len(children) == len(rows) and all(
+                            valid_operational_outcome(child, parents[int(child["observation_id"])])
+                            for child in children
+                        ):
+                    return 0
+                raise ValueError("Cohorte direccional incompleta o con integridad inválida; revisión manual.")
+            # Existing UI-era V3 observations at the same bar must not be
+            # overwritten or silently substituted for this fixed protocol.
+            conflict = connection.execute(
                 """SELECT 1 FROM live_model_observations
-                   WHERE symbol=? AND source_bar_at=? AND horizon_minutes=?
-                     AND integrity_version=2 LIMIT 1""",
-                (symbol, row["source_bar_at"], horizon_minutes),
+                   WHERE symbol=? AND source_bar_at=? AND integrity_version=? LIMIT 1""",
+                (rows[0]["symbol"], rows[0]["source_bar_at"], VERSION),
             ).fetchone()
-            if duplicate:
-                return False
-            names = tuple(row)
-            connection.execute(
-                f"INSERT INTO live_model_observations({','.join(names)}) VALUES ({','.join('?' for _ in names)})",
-                tuple(row[name] for name in names),
+            if conflict:
+                raise ValueError("Ya existe una emisión V3 de este cierre fuera del corte fijo.")
+            for row in rows:
+                names = tuple(row)
+                cursor = connection.execute(
+                    f"INSERT INTO live_model_observations({','.join(names)}) VALUES ({','.join('?' for _ in names)})",
+                    tuple(row[name] for name in names),
+                )
+                contract = json.loads(row["parameters_json"])["operational_contract"]
+                connection.execute(
+                    """INSERT INTO operational_model_outcomes(
+                        observation_id,target_version,contract_sha256,resolution_status,created_at
+                    ) VALUES (?,?,?,'PENDING',?)""",
+                    (cursor.lastrowid, TARGET_VERSION, contract["contract_sha256"], row["created_at"]),
+                )
+        return len(rows)
+
+    def live_model_execution_record(self, run_id: str) -> dict[str, Any] | None:
+        """Read one complete, signed six-horizon cut with its eventual outcomes.
+
+        A missing, partial, inconsistent or tampered cut is never presented as
+        reproducible evidence. Historical V3 rows without replay metadata keep
+        their old calibration behavior, but are not falsely upgraded here.
+        """
+        from .services.directional_collection import HORIZON_MINUTES, SUPPORTED_COLLECTION_PROTOCOLS
+        from .services.model_execution_record import execution_id
+        from .services.model_observations import VERSION, canonical, valid_observation
+        from .services.scenario_calibration import validate_contract
+
+        if not isinstance(run_id, str) or len(run_id) != 64 or any(
+            character not in "0123456789abcdef" for character in run_id
+        ):
+            return None
+        with self.database.connect() as connection:
+            stored = connection.execute(
+                """SELECT * FROM live_model_observations
+                   WHERE integrity_version=? AND CASE WHEN json_valid(parameters_json)
+                       THEN json_extract(parameters_json, '$.replay.run_id') END=?
+                   ORDER BY horizon_minutes""",
+                (VERSION, run_id),
+            ).fetchall()
+            child_rows = connection.execute(
+                """SELECT operational_model_outcomes.* FROM operational_model_outcomes
+                   JOIN live_model_observations
+                     ON live_model_observations.id=operational_model_outcomes.observation_id
+                   WHERE live_model_observations.integrity_version=?
+                     AND CASE WHEN json_valid(live_model_observations.parameters_json)
+                         THEN json_extract(live_model_observations.parameters_json, '$.replay.run_id') END=?""",
+                (VERSION, run_id),
+            ).fetchall()
+        if len(stored) != len(HORIZON_MINUTES) or not all(valid_observation(row) for row in stored):
+            return None
+        rows = [dict(row) for row in stored]
+        operational_by_id = {int(row["observation_id"]): row for row in child_rows}
+        if {row["horizon_minutes"] for row in rows} != set(HORIZON_MINUTES.values()):
+            return None
+        try:
+            metadata = [json.loads(row["parameters_json"]) for row in rows]
+            from .analytics.operational_target import (
+                validate_operational_contract, valid_operational_outcome,
             )
-        return True
+            from .services.directional_collection import (
+                COLLECTION_PROTOCOL, LEGACY_COLLECTION_PROTOCOL,
+            )
+            replay = metadata[0]["replay"]
+            if not isinstance(replay, dict) or any(
+                canonical(item["replay"]) != canonical(replay) for item in metadata
+            ):
+                return None
+            symbol, session = replay["symbol"], replay["session_date"]
+            stored_protocol = replay["collection_protocol"]
+            if (stored_protocol not in SUPPORTED_COLLECTION_PROTOCOLS
+                    or replay["run_id"] != execution_id(symbol, session, stored_protocol)):
+                return None
+            requires_operational_target = stored_protocol == COLLECTION_PROTOCOL
+            if stored_protocol == LEGACY_COLLECTION_PROTOCOL:
+                # V1 predates the first-passage target.  It remains valid
+                # directional evidence, but must never be silently upgraded
+                # with an unsigned or synthetic operational child.
+                if child_rows or any(
+                    "operational_contract" in item or "primary_validation_target" in item
+                    for item in metadata
+                ):
+                    return None
+            predictions = []
+            by_minutes = {minutes: label for label, minutes in HORIZON_MINUTES.items()}
+            for row, item in zip(rows, metadata):
+                contract = item["scenario_contract"]
+                vector, low, high = validate_contract(contract)
+                snapshot = item["prediction_snapshot"]
+                operational_contract = None
+                operational_result = None
+                if requires_operational_target:
+                    operational_contract = item["operational_contract"]
+                    validate_operational_contract(operational_contract)
+                    operational_result = operational_by_id.get(int(row["id"]))
+                    if (operational_result is None
+                            or not valid_operational_outcome(operational_result, row)):
+                        return None
+                if (row["symbol"] != symbol or row["observed_at"] != replay["observed_at"]
+                    or row["source_bar_at"] != replay["source_bar_closed_at"]
+                    or item["session_date"] != session
+                    or item["collection_protocol"] != stored_protocol
+                    or contract["model"]["symbol"] != symbol
+                    or contract["model"]["horizon_minutes"] != row["horizon_minutes"]
+                    or contract["model"]["engine"] != snapshot["engine_name"]
+                    or snapshot["label"] != by_minutes[row["horizon_minutes"]]
+                    or abs(vector[0] - float(row["raw_probability_up"])) > 1e-9
+                    or abs(vector[0] - float(snapshot["probability_up"]) / 100) > 1e-9
+                    or abs(vector[1] - float(snapshot["probability_range"]) / 100) > 1e-9
+                    or abs(vector[2] - float(snapshot["probability_down"]) / 100) > 1e-9
+                    or abs(low - float(snapshot["range_low"])) > 1e-9
+                    or abs(high - float(snapshot["range_high"])) > 1e-9):
+                    return None
+                prediction = {
+                    "horizon": snapshot["label"],
+                    "horizon_minutes": row["horizon_minutes"],
+                    "model_id": contract["model_id"],
+                    "engine_revision": contract["model"]["engine_revision"],
+                    "prediction": snapshot,
+                    "observed_at": row["observed_at"],
+                    "available_at": row["available_at"],
+                    "reference_price": row["reference_price"],
+                    "predicted_direction": row["predicted_direction"],
+                    "resolution_status": row["resolution_status"],
+                    "outcome_price": row["outcome_price"],
+                    "outcome_up": row["outcome_up"],
+                    "successful": row["successful"],
+                    "resolved_at": row["resolved_at"],
+                    "outcome_bar_at": row["outcome_bar_at"],
+                    "outcome_source": row["outcome_source"],
+                    "observation_sha256": row["observation_sha256"],
+                    "resolution_sha256": row["resolution_sha256"],
+                }
+                if requires_operational_target:
+                    prediction["operational_target"] = operational_contract
+                    prediction["operational_result"] = {
+                        "resolution_status": operational_result["resolution_status"],
+                        "outcome": operational_result["outcome"],
+                        "exit_price": operational_result["exit_price"],
+                        "exit_at": operational_result["exit_at"],
+                        "exit_source": operational_result["exit_source"],
+                        "evidence_sha256": operational_result["evidence_sha256"],
+                        "evidence": json.loads(operational_result["evidence_json"])
+                            if operational_result["evidence_json"] else None,
+                        "resolved_at": operational_result["resolved_at"],
+                        "outcome_sha256": operational_result["outcome_sha256"],
+                        "checkpoint": {
+                            "scanned_through": operational_result["scanned_through"],
+                            "evidence_sha256": operational_result["scan_evidence_sha256"],
+                            "evidence_count": operational_result["scan_evidence_count"],
+                            "evidence": json.loads(operational_result["scan_evidence_json"])
+                                if operational_result["scan_evidence_json"] else None,
+                            "updated_at": operational_result["checkpoint_updated_at"],
+                            "checkpoint_sha256": operational_result["checkpoint_sha256"],
+                        },
+                    }
+                predictions.append(prediction)
+            return {**replay, "predictions": predictions}
+        except (KeyError, TypeError, ValueError, OverflowError, IndexError):
+            return None
+
+    def pending_operational_model_symbols(self, as_of: datetime) -> tuple[str, ...]:
+        """All active first-passage paths must be scanned, even before timeout."""
+        from .services.model_observations import VERSION, utc_timestamp
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """SELECT DISTINCT live.symbol FROM operational_model_outcomes AS target
+                   JOIN live_model_observations AS live ON live.id=target.observation_id
+                   WHERE live.integrity_version=? AND target.resolution_status='PENDING'
+                     AND live.observed_at<=? ORDER BY live.symbol""",
+                (VERSION, utc_timestamp(as_of).isoformat()),
+            ).fetchall()
+        return tuple(row["symbol"] for row in rows)
+
+    def resolve_operational_model_outcomes(
+        self, *, symbol: str, current_as_of: datetime, historical_bars=None,
+        historical_daily_bars=None, source: str = "yfinance:5m:raw-ohlcv",
+        daily_source: str = "yfinance:1d:raw-ohlcv",
+        evidence_artifacts=None,
+    ) -> int:
+        """Advance signed evidence and attach TP/SL/timeout exactly once.
+
+        All pandas/calendar work happens before the short compare-and-swap
+        transaction so analytical catch-up never holds the ledger writer lock.
+        """
+        from .analytics.operational_target import (
+            IncompleteOperationalEvidence, OperationalResult,
+            operational_checkpoint_digest, operational_outcome_digest,
+            scan_operational_outcome, valid_operational_outcome,
+        )
+        from .services.model_observations import VERSION, canonical, utc_timestamp, valid_observation
+        now = utc_timestamp(current_as_of)
+        with self.database.connect() as connection:
+            joined = connection.execute(
+                """SELECT live.*, target.observation_id AS target_observation_id,
+                          target.target_version AS target_version,
+                          target.contract_sha256 AS contract_sha256,
+                          target.resolution_status AS target_resolution_status,
+                          target.outcome AS target_outcome,
+                          target.exit_price AS target_exit_price,
+                          target.exit_at AS target_exit_at,
+                          target.exit_source AS target_exit_source,
+                          target.evidence_sha256 AS target_evidence_sha256,
+                          target.evidence_json AS target_evidence_json,
+                          target.resolved_at AS target_resolved_at,
+                          target.outcome_sha256 AS target_outcome_sha256,
+                          target.scanned_through AS target_scanned_through,
+                          target.scan_evidence_sha256 AS target_scan_evidence_sha256,
+                          target.scan_evidence_count AS target_scan_evidence_count,
+                          target.scan_evidence_json AS target_scan_evidence_json,
+                          target.checkpoint_updated_at AS target_checkpoint_updated_at,
+                          target.checkpoint_sha256 AS target_checkpoint_sha256,
+                          target.created_at AS target_created_at
+                   FROM live_model_observations AS live
+                   JOIN operational_model_outcomes AS target ON target.observation_id=live.id
+                   WHERE live.symbol=? AND live.integrity_version=?
+                     AND target.resolution_status='PENDING' AND live.observed_at<=?
+                   ORDER BY live.observed_at,live.horizon_minutes""",
+                (symbol.strip().upper(), VERSION, now.isoformat()),
+            ).fetchall()
+        proposals = []
+        for joined_row in joined:
+            combined = dict(joined_row)
+            parent = {key: combined[key] for key in joined_row.keys()
+                      if not key.startswith("target_") and key != "target_observation_id"}
+            child = {
+                "observation_id": combined["target_observation_id"],
+                "target_version": combined["target_version"],
+                "contract_sha256": combined["contract_sha256"],
+                "resolution_status": combined["target_resolution_status"],
+                "outcome": combined["target_outcome"],
+                "exit_price": combined["target_exit_price"],
+                "exit_at": combined["target_exit_at"],
+                "exit_source": combined["target_exit_source"],
+                "evidence_sha256": combined["target_evidence_sha256"],
+                "evidence_json": combined["target_evidence_json"],
+                "resolved_at": combined["target_resolved_at"],
+                "outcome_sha256": combined["target_outcome_sha256"],
+                "scanned_through": combined["target_scanned_through"],
+                "scan_evidence_sha256": combined["target_scan_evidence_sha256"],
+                "scan_evidence_count": combined["target_scan_evidence_count"],
+                "scan_evidence_json": combined["target_scan_evidence_json"],
+                "checkpoint_updated_at": combined["target_checkpoint_updated_at"],
+                "checkpoint_sha256": combined["target_checkpoint_sha256"],
+                "created_at": combined["target_created_at"],
+            }
+            if not valid_observation(parent):
+                raise ValueError(
+                    f"Observación operativa {child['observation_id']} con integridad inválida."
+                )
+            if not valid_operational_outcome(child, parent):
+                raise ValueError(
+                    f"Resultado operativo {child['observation_id']} con integridad inválida."
+                )
+            contract = json.loads(parent["parameters_json"])["operational_contract"]
+            old_count = int(child["scan_evidence_count"] or 0)
+            try:
+                scan = scan_operational_outcome(
+                    contract, historical_bars, now, daily_bars=historical_daily_bars,
+                    resume_at=child["scanned_through"],
+                    previous_evidence_sha256=child["scan_evidence_sha256"],
+                    previous_evidence_count=old_count,
+                )
+            except IncompleteOperationalEvidence:
+                continue
+            if scan.evidence_count == old_count:
+                continue
+            prior_evidence = (
+                json.loads(child["scan_evidence_json"])
+                if child["scan_evidence_json"] else {"chunks": []}
+            )
+            chunks = list(prior_evidence.get("chunks", []))
+            chunks.append({
+                "scanned_at": now.isoformat(),
+                "scanned_through": scan.scanned_through,
+                "evidence_count": scan.evidence_count,
+                "artifacts": dict(evidence_artifacts or {}),
+            })
+            evidence_json = canonical({"chunks": chunks})
+            checkpoint_updated_at = now.isoformat()
+            checkpoint_sha = operational_checkpoint_digest(
+                parent["observation_sha256"], child["contract_sha256"],
+                scan.scanned_through, scan.evidence_sha256, scan.evidence_count,
+                evidence_json, checkpoint_updated_at,
+            )
+            result = scan.result
+            if result is not None:
+                provider = daily_source if result.exit_source.startswith("1d:") else source
+                result = OperationalResult(
+                    result.outcome, result.exit_price, result.exit_at,
+                    f"{provider}:{result.exit_source}", result.evidence_sha256,
+                )
+                outcome_sha = operational_outcome_digest(
+                    parent["observation_sha256"], child["contract_sha256"], result,
+                    checkpoint_updated_at, evidence_json,
+                )
+            else:
+                outcome_sha = None
+            proposals.append((parent, child, scan, result, evidence_json,
+                              checkpoint_updated_at, checkpoint_sha, outcome_sha))
+
+        resolved = 0
+        with self.database.transaction() as connection:
+            for parent, child, scan, result, evidence_json, updated_at, checkpoint_sha, outcome_sha in proposals:
+                common = (
+                    scan.scanned_through, scan.evidence_sha256, scan.evidence_count,
+                    evidence_json, updated_at, checkpoint_sha,
+                )
+                cas = (child["observation_id"], int(child["scan_evidence_count"] or 0),
+                       child["checkpoint_sha256"] or "")
+                if result is None:
+                    cursor = connection.execute(
+                        """UPDATE operational_model_outcomes SET
+                             scanned_through=?,scan_evidence_sha256=?,scan_evidence_count=?,
+                             scan_evidence_json=?,checkpoint_updated_at=?,checkpoint_sha256=?
+                           WHERE observation_id=? AND resolution_status='PENDING'
+                             AND scan_evidence_count=? AND COALESCE(checkpoint_sha256,'')=?""",
+                        (*common, *cas),
+                    )
+                else:
+                    cursor = connection.execute(
+                        """UPDATE operational_model_outcomes SET
+                             resolution_status='RESOLVED',outcome=?,exit_price=?,exit_at=?,
+                             exit_source=?,evidence_sha256=?,evidence_json=?,resolved_at=?,outcome_sha256=?,
+                             scanned_through=?,scan_evidence_sha256=?,scan_evidence_count=?,
+                             scan_evidence_json=?,checkpoint_updated_at=?,checkpoint_sha256=?
+                           WHERE observation_id=? AND resolution_status='PENDING'
+                             AND scan_evidence_count=? AND COALESCE(checkpoint_sha256,'')=?""",
+                        (result.outcome.value, str(result.exit_price), result.exit_at,
+                         result.exit_source, result.evidence_sha256, evidence_json,
+                         updated_at, outcome_sha, *common, *cas),
+                    )
+                if result is not None and cursor.rowcount:
+                    resolved += 1
+        return resolved
+
+    def verify_operational_model_outcomes(self) -> tuple[int, tuple[int, ...]]:
+        from .analytics.operational_target import valid_operational_outcome
+        from .services.model_observations import valid_observation
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """SELECT live.*, target.observation_id AS child_id,
+                          target.target_version AS child_target_version,
+                          target.contract_sha256 AS child_contract_sha256,
+                          target.resolution_status AS child_resolution_status,
+                          target.outcome AS child_outcome,target.exit_price AS child_exit_price,
+                          target.exit_at AS child_exit_at,target.exit_source AS child_exit_source,
+                          target.evidence_sha256 AS child_evidence_sha256,
+                          target.evidence_json AS child_evidence_json,
+                          target.resolved_at AS child_resolved_at,
+                          target.outcome_sha256 AS child_outcome_sha256,
+                          target.scanned_through AS child_scanned_through,
+                          target.scan_evidence_sha256 AS child_scan_evidence_sha256,
+                          target.scan_evidence_count AS child_scan_evidence_count,
+                          target.scan_evidence_json AS child_scan_evidence_json,
+                          target.checkpoint_updated_at AS child_checkpoint_updated_at,
+                          target.checkpoint_sha256 AS child_checkpoint_sha256,
+                          target.created_at AS child_created_at
+                   FROM operational_model_outcomes AS target
+                   JOIN live_model_observations AS live ON live.id=target.observation_id"""
+            ).fetchall()
+        invalid = []
+        for stored in rows:
+            data = dict(stored)
+            child = {"observation_id": data["child_id"], "target_version": data["child_target_version"],
+                     "contract_sha256": data["child_contract_sha256"],
+                     "resolution_status": data["child_resolution_status"],
+                     "outcome": data["child_outcome"], "exit_price": data["child_exit_price"],
+                     "exit_at": data["child_exit_at"], "exit_source": data["child_exit_source"],
+                     "evidence_sha256": data["child_evidence_sha256"],
+                     "evidence_json": data["child_evidence_json"],
+                     "resolved_at": data["child_resolved_at"],
+                     "outcome_sha256": data["child_outcome_sha256"],
+                     "scanned_through": data["child_scanned_through"],
+                     "scan_evidence_sha256": data["child_scan_evidence_sha256"],
+                     "scan_evidence_count": data["child_scan_evidence_count"],
+                     "scan_evidence_json": data["child_scan_evidence_json"],
+                     "checkpoint_updated_at": data["child_checkpoint_updated_at"],
+                     "checkpoint_sha256": data["child_checkpoint_sha256"],
+                     "created_at": data["child_created_at"]}
+            parent = {key: data[key] for key in stored.keys() if not key.startswith("child_")}
+            if not valid_observation(parent) or not valid_operational_outcome(child, parent):
+                invalid.append(int(child["observation_id"]))
+        return len(rows) - len(invalid), tuple(invalid)
 
     def resolve_live_model_observations(
         self,
@@ -707,7 +1186,9 @@ class PortfolioRepository:
         symbol: str,
         current_as_of: datetime,
         historical_bars=None,
+        historical_daily_bars=None,
         source: str = "yfinance:5m:raw-close",
+        daily_source: str = "yfinance:1d:raw-close",
         current_price: Decimal | None = None,
     ) -> int:
         """Resolve only exact historical closes. Missing bars remain pending.
@@ -717,19 +1198,21 @@ class PortfolioRepository:
         """
         from .services.model_observations import (
             utc_timestamp, is_regular_close, exact_closed_prices,
-            valid_observation, resolution_digest,
+            exact_daily_closed_prices, valid_observation, resolution_digest,
+            POLICY, SESSION_HORIZONS,
         )
         if current_price is not None:
             raise ValueError("No se permite resolver con precio actual; proporciona velas históricas de 5m.")
-        if not source or not isinstance(source, str):
+        if not source or not isinstance(source, str) or not daily_source or not isinstance(daily_source, str):
             raise ValueError("Falta la procedencia del precio histórico.")
         now = utc_timestamp(current_as_of)
-        prices = exact_closed_prices(historical_bars, now)
+        intraday_prices = exact_closed_prices(historical_bars, now)
+        daily_prices = exact_daily_closed_prices(historical_daily_bars, now)
         resolved = 0
         with self.database.transaction() as connection:
             rows = connection.execute(
                 """SELECT * FROM live_model_observations
-                   WHERE symbol=? AND integrity_version=2 AND resolution_status='PENDING'
+                   WHERE symbol=? AND integrity_version>=2 AND resolution_status='PENDING'
                      AND available_at<=? ORDER BY available_at, id""",
                 (symbol.strip().upper(), now.isoformat()),
             ).fetchall()
@@ -741,16 +1224,23 @@ class PortfolioRepository:
                 due = row["available_at"]
                 if not is_regular_close(due):
                     row.update(resolution_status="INVALID_MARKET_CLOSED", resolved_at=now.isoformat())
-                elif due not in prices:
-                    continue
                 else:
+                    session_based = (
+                        row["horizon_policy"] == POLICY
+                        and int(row["horizon_minutes"]) in SESSION_HORIZONS
+                    )
+                    prices = daily_prices if session_based else intraday_prices
+                    outcome_source = daily_source if session_based else source
+                if row["resolution_status"] == "PENDING" and due not in prices:
+                    continue
+                if row["resolution_status"] == "PENDING":
                     outcome = Decimal(prices[due])
                     up = int(outcome > Decimal(row["reference_price"]))
                     row.update(
                         outcome_price=str(outcome), outcome_up=up,
                         successful=int((row["predicted_direction"] == "UP") == bool(up)),
                         resolved_at=now.isoformat(), outcome_bar_at=due,
-                        outcome_source=source, resolution_status="RESOLVED",
+                        outcome_source=outcome_source, resolution_status="RESOLVED",
                     )
                     resolved += 1
                 row["resolution_sha256"] = resolution_digest(row)
@@ -764,11 +1254,23 @@ class PortfolioRepository:
                 )
         return resolved
 
+    def pending_live_model_symbols(self, as_of: datetime) -> tuple[str, ...]:
+        """Symbols with due signed V3 forecasts, independent of zone predictions."""
+        from .services.model_observations import VERSION, utc_timestamp
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """SELECT DISTINCT symbol FROM live_model_observations
+                   WHERE integrity_version=? AND resolution_status='PENDING'
+                     AND available_at<=? ORDER BY symbol""",
+                (VERSION, utc_timestamp(as_of).isoformat()),
+            ).fetchall()
+        return tuple(row["symbol"] for row in rows)
+
     def _verified_live_results(self, symbol: str, *, horizon_minutes=None, limit=2000):
-        from .services.model_observations import valid_observation
+        from .services.model_observations import VERSION, valid_observation
         query = """SELECT * FROM live_model_observations WHERE symbol=?
-                   AND integrity_version=2 AND resolution_status='RESOLVED'"""
-        values = [symbol.strip().upper()]
+                   AND integrity_version=? AND resolution_status='RESOLVED'"""
+        values = [symbol.strip().upper(), VERSION]
         if horizon_minutes is not None:
             query += " AND horizon_minutes=?"
             values.append(int(horizon_minutes))
@@ -778,7 +1280,13 @@ class PortfolioRepository:
             rows = connection.execute(query, values).fetchall()
         return [row for row in rows if valid_observation(row)]
 
-    def live_model_stats(self, symbol: str, limit: int = 100) -> dict[str, float | int | None]:
+    def live_model_stats(self, symbol: str, limit: int = 100) -> dict[str, Any]:
+        """Return aggregate monitoring only; never an execution threshold.
+
+        Rows can belong to different horizons, so accuracy and Brier are useful
+        for operational health/audit but are not a statistically coherent input
+        to any individual horizon decision.
+        """
         rows = self._verified_live_results(symbol, limit=max(1, min(limit, 500)))
         total = len(rows)
         wins = sum(int(row["successful"]) for row in rows)
@@ -790,11 +1298,10 @@ class PortfolioRepository:
         holdout = chronological_split(timed).holdout
         brier = (sum((r.probabilities[0]-r.outcome)**2 for r in holdout)/len(holdout)
                  if holdout else None)
-        learning_weight = min(total / 40, 1.0)
-        adaptive_threshold = 0.55 + max(-0.03, min(0.10, (0.55 - accuracy) * 0.20 * learning_weight))
         return dict(resolved=total, wins=wins, accuracy=accuracy,
-                    brier_score=brier, adaptive_threshold=adaptive_threshold,
-                    brier_holdout_samples=len(holdout))
+                    brier_score=brier, brier_holdout_samples=len(holdout),
+                    decision_eligible=False,
+                    scope="AGGREGATE_DIAGNOSTIC_ONLY")
 
     def live_model_calibration_samples(
         self, symbol: str, *, horizon_minutes: int = 390, limit: int = 2000,
@@ -810,22 +1317,23 @@ class PortfolioRepository:
     ):
         """One signed model/target; emission order and point-in-time labels.
 
-        v2 binary records without frozen range/vector are never reinterpreted.
+        Legacy V2 binary records and other model versions are never
+        reinterpreted as samples of the current V3 session contract.
         The calibrator performs 60/20/20 splitting and temporal purging.
         """
         from .analytics.probability_calibration import CalibrationSample
-        from .services.model_observations import valid_observation, utc_timestamp
+        from .services.model_observations import VERSION, valid_observation, utc_timestamp
         from .services.scenario_calibration import validate_contract, outcome_class
         cutoff = utc_timestamp(as_of)
         with self.database.connect() as connection:
             rows = connection.execute(
                 """SELECT * FROM live_model_observations
-                   WHERE symbol=? AND horizon_minutes=? AND integrity_version=2
+                   WHERE symbol=? AND horizon_minutes=? AND integrity_version=?
                      AND resolution_status='RESOLVED' AND resolved_at<=?
                      AND CASE WHEN json_valid(parameters_json)
                          THEN json_extract(parameters_json, '$.scenario_contract.model_id') END = ?
                    ORDER BY observed_at DESC, id DESC LIMIT ?""",
-                (symbol.strip().upper(), horizon_minutes, cutoff.isoformat(), model_id,
+                (symbol.strip().upper(), horizon_minutes, VERSION, cutoff.isoformat(), model_id,
                  max(1, min(limit, 10000))),
             ).fetchall()
         samples = []
@@ -847,7 +1355,16 @@ class PortfolioRepository:
                                                   observed, available, resolved))
             except (KeyError, TypeError, ValueError):
                 continue
-        return tuple(sorted(samples, key=lambda sample: sample.observed_at))
+        # One independent cohort per NY trading session and horizon. Repeated
+        # five-minute emissions are useful for audit/replay, but must not inflate
+        # the calibration sample size. Keep the first knowable forecast of each
+        # session for this immutable model contract.
+        ny = ZoneInfo("America/New_York")
+        daily_cohort = {}
+        for sample in sorted(samples, key=lambda item: item.observed_at):
+            session_date = sample.observed_at.astimezone(ny).date()
+            daily_cohort.setdefault(session_date, sample)
+        return tuple(daily_cohort.values())
 
     def verify_live_model_observations(self) -> tuple[int, tuple[int, ...]]:
         """Invalid IDs include legacy rows whose outcomes cannot be certified."""

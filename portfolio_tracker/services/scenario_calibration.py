@@ -7,6 +7,7 @@ from pathlib import Path
 
 from portfolio_tracker.analytics.probability_calibration import validate_distribution
 from portfolio_tracker.services.model_observations import canonical
+from portfolio_tracker.services.model_observations import POLICY as HORIZON_POLICY
 
 CONTRACT = "CLOSE_RANGE_3CLASS_V1"
 
@@ -25,6 +26,7 @@ def engine_revision():
 def make_scenario_contract(symbol, horizon, horizon_minutes, parameters):
     model = dict(symbol=symbol.upper(), engine=horizon.engine_name,
                  horizon_minutes=horizon_minutes, parameters=parameters,
+                 horizon_policy=HORIZON_POLICY,
                  engine_revision=engine_revision(), target=CONTRACT)
     contract = dict(
         version=CONTRACT, model=model,

@@ -1,5 +1,11 @@
 # Observaciones en vivo v2 - F01/F02
 
+> Nota de vigencia: este documento conserva el contrato histórico V2 para
+> auditoría. Las emisiones automáticas actuales usan
+> `XNYS_TRADING_MINUTES_AND_FUTURE_SESSIONS_V3` y el protocolo
+> `XNYS_1100_OPERATIONAL_TARGET_V2`. V2 sigue siendo verificable, pero no se
+> mezcla con la cohorte vigente.
+
 ## Alcance y migración
 
 La migración 9 agrega únicamente columnas, índices y restricciones a
@@ -76,3 +82,22 @@ velas futuras, datos ausentes y preservación del legado/contabilidad.
 Se actualizó la antigua prueba que aceptaba un precio spot tardío para que
 exija la vela histórica del vencimiento. El generador de auditoría conserva
 su catálogo histórico y marca fuentes cambiadas para revalidación humana.
+
+## Objetivo operativo posterior, separado de V2
+
+Las emisiones actuales conservan la resolución direccional de cierre en la
+fila padre y añaden una fila hija inmutable en `operational_model_outcomes`.
+Su etiqueta primaria es `TP_FIRST / SL_FIRST / TIMEOUT`; no reemplaza ni
+reinterpreta resultados V2 existentes.
+
+La evaluación first-passage comienza en la primera vela 5m completamente
+posterior a `observed_at`, usa gaps adversos al precio de apertura, limita gaps
+favorables al TP y resuelve como `SL_FIRST` cualquier empate intrabar. La fuente
+principal es 5m; una sesión futura completa puede usar OHLC diario bajo esa
+misma política conservadora, pero la sesión de emisión nunca se reconstruye con
+su vela diaria. Resultado, evidencia inspeccionada y referencias de artefactos
+quedan firmados.
+
+No existe una conversión válida entre la probabilidad `UP / RANGE / DOWN` y la
+probabilidad de cuál barrera se toca primero. Por ello las probabilidades del
+nuevo objetivo se mantienen `N/D` hasta reunir y evaluar una cohorte OOS propia.

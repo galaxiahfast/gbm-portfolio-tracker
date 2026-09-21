@@ -5,6 +5,14 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 
+def test_executive_decision_cannot_use_a_mixed_horizon_adaptive_threshold():
+    source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+
+    assert "adaptive_probability_threshold" not in source
+    assert 'online_stats["adaptive_threshold"]' not in source
+    assert "UMBRAL ONLINE NO ALCANZADO" not in source
+
+
 def test_executive_view_keeps_both_zones_and_secondary_details_closed():
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -18,7 +26,8 @@ from portfolio_tracker.analytics.chart_patterns import PatternDirection
 from portfolio_tracker.services.pdf_report import executive_decision
 from portfolio_tracker.services.projection_chart import ordered_horizon_projections, build_15_day_projection_figure
 from portfolio_tracker.ui.theme import apply_premium_ui
-from portfolio_tracker.ui.price_zones import render_price_zones
+from portfolio_tracker.ui.price_zones import render_operational_signal, render_price_zones
+from portfolio_tracker.ui.system_decision import render_system_decision
 from tests.test_pdf_report import _analysis
 '''
     script += functions

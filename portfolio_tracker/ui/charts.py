@@ -150,6 +150,81 @@ def premium_line_chart(
     )
 
 
+def portfolio_history_chart(
+    data: pd.DataFrame,
+    *,
+    height: int = 340,
+    key: str = "portfolio_history",
+) -> None:
+    """Muestra la composición del patrimonio sin suavizar movimientos contables.
+
+    Efectivo y posiciones forman un área apilada; patrimonio se conserva como
+    línea de control. Los puntos repetidos del mismo minuto se consolidan para
+    que abrir o refrescar la app no deforme la lectura.
+    """
+
+    import plotly.graph_objects as go
+
+    required = ["Efectivo", "Posiciones", "Patrimonio"]
+    if data.empty or any(column not in data for column in required):
+        st.info("No hay observaciones suficientes para mostrar esta gráfica.")
+        return
+    frame = _numeric_frame(data[required]).sort_index()
+    frame = frame[~frame.index.duplicated(keep="last")]
+    if isinstance(frame.index, pd.DatetimeIndex):
+        frame = frame.groupby(frame.index.floor("min")).last()
+    if frame.empty:
+        st.info("No hay observaciones suficientes para mostrar esta gráfica.")
+        return
+
+    figure = go.Figure()
+    figure.add_trace(go.Scatter(
+        x=frame.index, y=frame["Efectivo"], name="Efectivo USD",
+        mode="lines", stackgroup="composicion",
+        line={"color": "#D8D8D8", "width": 1.5, "shape": "linear"},
+        fillcolor="rgba(216,216,216,.24)",
+        hovertemplate="Efectivo: $%{y:,.2f}<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=frame.index, y=frame["Posiciones"], name="Posiciones USD",
+        mode="lines", stackgroup="composicion",
+        line={"color": "#777777", "width": 1.5, "shape": "linear"},
+        fillcolor="rgba(119,119,119,.28)",
+        hovertemplate="Posiciones: $%{y:,.2f}<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=frame.index, y=frame["Patrimonio"], name="Patrimonio total",
+        mode="lines+markers",
+        line={"color": "#FFFFFF", "width": 2.4, "shape": "linear"},
+        marker={"size": 4, "color": "#FFFFFF"},
+        hovertemplate="Patrimonio: $%{y:,.2f}<extra></extra>",
+    ))
+    figure.update_layout(
+        height=height,
+        margin={"l": 10, "r": 12, "t": 18, "b": 18},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"family": "Inter, sans-serif", "color": "#C8C8C8", "size": 11},
+        hovermode="x unified",
+        hoverlabel={"bgcolor": "#111111", "font": {"color": "#FFFFFF"}},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "x": 0},
+        xaxis={"showgrid": False, "title": None},
+        yaxis={
+            "showgrid": True,
+            "gridcolor": "rgba(170,170,170,.10)",
+            "rangemode": "tozero",
+            "tickprefix": "$",
+            "title": "USD",
+        },
+    )
+    st.plotly_chart(
+        figure,
+        width="stretch",
+        key=key,
+        config={"displaylogo": False, "displayModeBar": False, "responsive": True},
+    )
+
+
 def premium_bar_chart(
     data: Any,
     *,

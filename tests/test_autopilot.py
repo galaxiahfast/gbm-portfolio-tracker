@@ -15,6 +15,8 @@ from portfolio_tracker.repository import PortfolioRepository
 from portfolio_tracker.services.price_zones import DisplayZone, ZoneSnapshot
 from portfolio_tracker.analytics.zone_reach import ReachEstimate
 from portfolio_tracker.services.zone_forward import ZonePrediction
+from portfolio_tracker.services.directional_collection import HORIZON_MINUTES, fixed_cut_forecasts
+from portfolio_tracker.services.model_observations import POLICY, VERSION
 from tests.test_zone_forward import market, prediction
 
 UTC_TIME = pd.Timestamp("2026-09-03T15:00:10Z").to_pydatetime()
@@ -59,6 +61,17 @@ def test_refuse_new_accounting_database(tmp_path):
     assert not target.exists()
 
 
+def test_refuse_outdated_operational_schema_before_scheduled_work(tmp_path):
+    target = tmp_path / "outdated.db"
+    database = Database(target)
+    database.initialize()
+    PortfolioRepository(database).ensure_zone_forward_schema()
+    with database.transaction() as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version=12")
+    with pytest.raises(ValueError, match="se requiere v12"):
+        runtime.open_repository(target)
+
+
 def test_os_lock_released_after_exception(tmp_path):
     path = tmp_path / "jobs.lock"
     with pytest.raises(RuntimeError):
@@ -77,20 +90,43 @@ def synthetic_snapshot(now):
     return ZoneSnapshot(now, (buy,)*3, (sell,)*3, (estimate,)*6)
 
 
+def synthetic_analysis(symbol, source="2026-09-03T15:00:00Z"):
+    horizons = tuple(SimpleNamespace(
+        label=label, probability_up=60., probability_range=30., probability_down=10.,
+        range_low=99., range_high=101., engine_name="test",
+    ) for label in HORIZON_MINUTES)
+    return SimpleNamespace(symbol=symbol, last_price=100.,
+                           source_bar_closed_at=pd.Timestamp(source),
+                           horizon_projections=horizons,
+                           execution_levels=SimpleNamespace(
+                               direction="LONG", stop_loss=95., take_profit_1=105.,
+                           ), activation_trigger_met=True,
+                           execution_plan_conditional=False, risk_veto=False,
+                           signal_rejected=False)
+
+
 def test_collection_six_each_idempotent_and_no_ledger_writes(repo, tmp_path, monkeypatch):
     import portfolio_tracker.services.price_zones as zones
     log = logging.getLogger("test")
     before = repo.cash_balance_usd()
     monkeypatch.setattr(runtime, "fundamental_context", lambda *_: (None, ""))
     monkeypatch.setattr(MarketCache, "frames", lambda *_: (None, None))
-    monkeypatch.setattr(runtime, "analyze_headless", lambda r,s,*a: SimpleNamespace(
-        symbol=s, last_price=100., source_bar_closed_at=pd.Timestamp("2026-09-03T15:00:00Z")))
+    monkeypatch.setattr(runtime, "analyze_headless", lambda r,s,*a: synthetic_analysis(s))
     monkeypatch.setattr(zones, "build_zone_snapshot", lambda _,now: synthetic_snapshot(now))
     code = runtime.collect(repo, ["SMCI","NVDA"], tmp_path, log, now_fn=lambda: UTC_TIME)
     assert code == 0
     assert len(repo.zone_predictions()) == 12
+    with repo.database.connect() as connection:
+        rows = connection.execute("SELECT * FROM live_model_observations ORDER BY symbol,horizon_minutes").fetchall()
+    assert len(rows) == 12
+    assert {row["symbol"] for row in rows} == {"SMCI", "NVDA"}
+    assert {row["horizon_minutes"] for row in rows} == set(HORIZON_MINUTES.values())
+    assert all(row["integrity_version"] == VERSION and row["horizon_policy"] == POLICY for row in rows)
+    assert repo.verify_live_model_observations() == (12, ())
     assert runtime.collect(repo, ["SMCI","NVDA"], tmp_path, log, now_fn=lambda: UTC_TIME) == 0
     assert len(repo.zone_predictions()) == 12
+    with repo.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM live_model_observations").fetchone()[0] == 12
     assert repo.cash_balance_usd() == before
     with repo.database.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
@@ -104,11 +140,70 @@ def test_failure_one_symbol_continues_other(repo, tmp_path, monkeypatch):
         return None, ""
     monkeypatch.setattr(runtime, "fundamental_context", fundamental)
     monkeypatch.setattr(MarketCache, "frames", lambda *_: (None, None))
-    monkeypatch.setattr(runtime, "analyze_headless", lambda r,s,*a: SimpleNamespace(
-        symbol=s, last_price=100., source_bar_closed_at=pd.Timestamp("2026-09-03T15:00:00Z")))
+    monkeypatch.setattr(runtime, "analyze_headless", lambda r,s,*a: synthetic_analysis(s))
     monkeypatch.setattr(zones, "build_zone_snapshot", lambda _,now: synthetic_snapshot(now))
     assert runtime.collect(repo, ["SMCI","NVDA"], tmp_path, logging.getLogger("test"), now_fn=lambda: UTC_TIME) == 1
     assert {r["symbol"] for r in repo.zone_predictions()} == {"NVDA"}
+    with repo.database.connect() as connection:
+        assert {r["symbol"] for r in connection.execute("SELECT symbol FROM live_model_observations")} == {"NVDA"}
+
+
+def test_fixed_cut_rejects_open_or_stale_bar_and_closed_market(repo):
+    parameters = {"stop_atr_multiple": 2.25}
+    for source, now in [
+        ("2026-09-03T15:05:00Z", "2026-09-03T15:00:10Z"),
+        ("2026-09-03T14:55:00Z", "2026-09-03T15:00:10Z"),
+        ("2026-09-03T15:00:00Z", "2026-09-07T15:00:10Z"),
+    ]:
+        with pytest.raises(ValueError):
+            fixed_cut_forecasts(synthetic_analysis("SMCI", source), parameters,
+                                pd.Timestamp(now).to_pydatetime())
+    with repo.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM live_model_observations").fetchone()[0] == 0
+
+
+def test_fixed_cut_est_and_edt_are_same_ny_wall_clock():
+    from portfolio_tracker.services.directional_collection import fixed_cut_forecasts
+    for source, now in [
+        ("2026-09-03T15:00:00Z", "2026-09-03T15:00:10Z"),
+        ("2026-12-01T16:00:00Z", "2026-12-01T16:00:10Z"),
+    ]:
+        rows = fixed_cut_forecasts(synthetic_analysis("SMCI", source), {},
+                                   pd.Timestamp(now).to_pydatetime())
+        assert len(rows) == 6
+        assert all('"scheduled_cut_ny": "11:00"' in row["parameters_json"] for row in rows)
+
+
+def test_fixed_cut_later_retry_does_not_create_another_cohort(repo):
+    from portfolio_tracker.services.directional_collection import record_fixed_directional
+    first = synthetic_analysis("SMCI")
+    assert record_fixed_directional(repo, first, {}, UTC_TIME) == 6
+    later = synthetic_analysis("SMCI", "2026-09-03T15:05:00Z")
+    retry_at = pd.Timestamp("2026-09-03T15:05:10Z").to_pydatetime()
+    assert record_fixed_directional(repo, later, {}, retry_at) == 0
+    assert repo.verify_live_model_observations() == (6, ())
+
+
+def test_directional_resolver_uses_exact_historical_close_without_zone_rows(repo, monkeypatch):
+    from portfolio_tracker.services.directional_collection import record_fixed_directional
+    assert record_fixed_directional(repo, synthetic_analysis("NVDA"), {}, UTC_TIME) == 6
+    cash_before = repo.cash_balance_usd()
+    bars = pd.DataFrame(
+        {"Open": [100., 120.], "High": [101., 121.], "Low": [99., 119.],
+         "Close": [101., 120.], "Volume": [100., 100.]},
+        index=pd.DatetimeIndex(["2026-09-03T15:55:00Z", "2026-09-03T16:00:00Z"]),
+    )
+    monkeypatch.setattr(MarketCache, "frames", lambda *_: (bars, pd.DataFrame()))
+    as_of = pd.Timestamp("2026-09-03T16:10:00Z").to_pydatetime()
+    assert runtime.resolve(repo, ["SMCI", "NVDA"], logging.getLogger("test"), now=as_of) == 0
+    with repo.database.connect() as connection:
+        row = connection.execute("""SELECT * FROM live_model_observations
+                                    WHERE symbol='NVDA' AND horizon_minutes=60""").fetchone()
+        assert row["outcome_price"] == "101.0"
+        assert row["outcome_bar_at"] == "2026-09-03T16:00:00+00:00"
+        assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+    assert repo.verify_live_model_observations() == (6, ())
+    assert repo.cash_balance_usd() == cash_before
 
 
 def test_boot_resolves_friday_not_monday_spot_and_rerun_noop(repo, monkeypatch):
@@ -199,6 +294,11 @@ def test_entrypoints_do_not_import_streamlit_or_start_server():
         assert "app" not in imports and not any((s or "").startswith("streamlit") for s in imports)
 
 
+def test_streamlit_reruns_do_not_write_directional_observations():
+    source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    assert "repository.record_live_model_observation(" not in source
+
+
 def test_scheduler_has_forward_and_backup_tasks_without_plaintext_credentials():
     text = (Path(__file__).resolve().parents[1]/"scripts/install_autopilot_tasks.ps1").read_text()
     for name in ("Collector", "Resolver", "Catchup"):
@@ -210,6 +310,7 @@ def test_scheduler_has_forward_and_backup_tasks_without_plaintext_credentials():
     assert 'Get-Credential' in text and '<LogonType>$mode' in text
     assert 'S4U' not in text and 'Set-TimeZone' not in text
     assert "pythonw.exe" in text and "--scheduled --symbols" in text
+    assert "[switch]$CollectorOnly" in text
 
 def test_catchup_does_not_fetch_current_unexpired_session(repo, monkeypatch):
     from portfolio_tracker.services import forward_market

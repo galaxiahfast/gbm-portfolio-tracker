@@ -37,7 +37,8 @@ from portfolio_tracker.analytics.fundamental_news import (
 )
 from portfolio_tracker.analytics.probability_calibration import calibrate_scenarios
 from portfolio_tracker.analytics.risk import concentration_warnings
-from portfolio_tracker.analytics.multi_timeframe import MacroTrend
+from portfolio_tracker.analytics.multi_timeframe import MacroTrend, calculate_15_day_projection
+from portfolio_tracker.analytics.directional_probability import fifteen_day_up_score
 from portfolio_tracker.analytics.technical_probability import (
     CandlePattern,
     CloudPosition,
@@ -89,9 +90,16 @@ from portfolio_tracker.services.quant_market_data import (
 )
 from portfolio_tracker.services.receipt_storage import ReceiptStorage
 from portfolio_tracker.services.validation import validate_trade
-from portfolio_tracker.ui import apply_premium_ui, premium_bar_chart, premium_line_chart
-from portfolio_tracker.ui.price_zones import render_price_zones
+from portfolio_tracker.ui import (
+    apply_premium_ui,
+    portfolio_history_chart,
+    premium_bar_chart,
+    premium_line_chart,
+)
+from portfolio_tracker.ui.price_zones import render_operational_signal, render_price_zones
+from portfolio_tracker.ui.system_decision import render_system_decision
 from portfolio_tracker.services.price_zones import build_visual_zone_snapshot
+from portfolio_tracker.services.decision_engine import generate_decision
 
 
 st.set_page_config(
@@ -563,6 +571,20 @@ def dashboard(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None
             icon=":material/payments:", help=mxn(summary.cash_usd, fx_quote)
         )
         st.metric(
+            "Efectivo equivalente MXN",
+            (
+                f"${money(summary.cash_usd * fx_quote.rate):,.2f} MXN"
+                if fx_quote else "N/D"
+            ),
+            border=True,
+            icon=":material/currency_exchange:",
+            help=(
+                f"Conversión informativa al tipo USD/MXN {fx_quote.rate:,.4f}. "
+                "No representa un saldo separado en pesos."
+                if fx_quote else "No hay un tipo de cambio disponible."
+            ),
+        )
+        st.metric(
             "Posiciones", usd_metric(summary.holdings_value_usd), border=True,
             icon=":material/candlestick_chart:", help=mxn(summary.holdings_value_usd, fx_quote)
         )
@@ -644,7 +666,14 @@ def dashboard(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None
                 "Efectivo": [float(row["cash_usd"]) for row in snapshots],
                 "Posiciones": [float(row["holdings_value_usd"]) for row in snapshots],
             }).set_index("Fecha")
-            premium_line_chart(history, height=320, key="portfolio_history")
+            first_value = history["Patrimonio"].iloc[0]
+            last_value = history["Patrimonio"].iloc[-1]
+            st.caption(
+                f"Patrimonio inicial registrado: ${first_value:,.2f} USD · "
+                f"Último: ${last_value:,.2f} USD · "
+                "áreas apiladas = efectivo + posiciones."
+            )
+            portfolio_history_chart(history, height=340, key="portfolio_history")
         else:
             st.info("La serie crecerá conforme se registren nuevas valuaciones.")
 
@@ -760,18 +789,62 @@ def cash_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None
 
     with history_tab:
         movements = repository.list_cash_movements()
+        deposits = [row for row in movements if row["kind"] == CashMovementKind.DEPOSIT.value]
+        withdrawals = [row for row in movements if row["kind"] == CashMovementKind.WITHDRAWAL.value]
+        deposited_mxn = sum((row["original_amount"] for row in deposits), Decimal("0"))
+        credited_usd = sum((row["usd_amount"] for row in deposits), Decimal("0"))
+        withdrawn_usd = sum((row["usd_amount"] for row in withdrawals), Decimal("0"))
+        delivered_mxn = sum((row["original_amount"] for row in withdrawals), Decimal("0"))
+
+        with st.container(horizontal=True):
+            st.metric(
+                "Depósitos desde MXN",
+                f"${deposited_mxn:,.2f} MXN",
+                help=f"Equivalente acreditado: {usd(credited_usd)}",
+                border=True,
+            )
+            st.metric(
+                "Retiros hacia MXN",
+                usd(withdrawn_usd),
+                help=f"Entregado: ${delivered_mxn:,.2f} MXN",
+                border=True,
+            )
+
         frame = pd.DataFrame([{
             "ID": row["id"],
-            "Fecha": local_datetime(row["occurred_at"]).strftime("%d/%m/%Y"),
-            "Tipo": {"INITIAL": "Capital inicial", "DEPOSIT": "Ingreso", "WITHDRAWAL": "Retiro"}[row["kind"]],
-            "Importe origen": f"{row['original_amount']} {row['original_currency']}",
-            "USD": float(row["usd_amount"]),
-            "USD/MXN": float(row["fx_rate"]) if row["fx_rate"] else None,
+            "Fecha": local_datetime(row["occurred_at"]),
+            "Movimiento": {
+                "INITIAL": "Capital inicial",
+                "DEPOSIT": "Depósito MXN → USD",
+                "WITHDRAWAL": "Retiro USD → MXN",
+            }[row["kind"]],
+            "Sale": (
+                f"${row['usd_amount']:,.2f} USD"
+                if row["kind"] == CashMovementKind.WITHDRAWAL.value
+                else f"${row['original_amount']:,.2f} {row['original_currency']}"
+            ),
+            "Tipo de cambio": float(row["fx_rate"]) if row["fx_rate"] else None,
+            "Entra": (
+                f"${row['original_amount']:,.2f} MXN"
+                if row["kind"] == CashMovementKind.WITHDRAWAL.value
+                else f"${row['usd_amount']:,.2f} USD"
+            ),
+            "Impacto en efectivo USD": (
+                -float(row["usd_amount"])
+                if row["kind"] == CashMovementKind.WITHDRAWAL.value
+                else float(row["usd_amount"])
+            ),
             "Notas": row["notes"],
         } for row in movements])
         st.dataframe(
             frame, width="stretch", hide_index=True,
-            column_config={"USD": st.column_config.NumberColumn(format="$%.2f")}
+            column_config={
+                "Fecha": st.column_config.DatetimeColumn(format="DD/MM/YYYY"),
+                "Tipo de cambio": st.column_config.NumberColumn(
+                    "USD/MXN aplicado", format="%.4f"
+                ),
+                "Impacto en efectivo USD": st.column_config.NumberColumn(format="$%.2f"),
+            },
         )
 
 
@@ -978,8 +1051,8 @@ def market_page(repository: PortfolioRepository) -> None:
 def _render_probability_executive(
     analysis: ProbabilityAnalysis,
     *,
-    adaptive_probability_threshold: float | None = None,
     zone_snapshot=None,
+    system_decision=None,
 ) -> None:
     """Panel de decisión breve; no vuelve a consultar ni recalcula datos de mercado."""
 
@@ -987,18 +1060,11 @@ def _render_probability_executive(
     decision_label = decision.label
     decision_rationale = decision.rationale
     decision_tone = decision.tone
-    if (
-        adaptive_probability_threshold is not None
-        and analysis.operation_probability / 100 < adaptive_probability_threshold
-        and decision_tone == "success"
-    ):
-        decision_label = "ESPERAR · UMBRAL ONLINE NO ALCANZADO"
-        decision_rationale = (
-            f"El gatillo técnico existe, pero el score {analysis.operation_probability:.1f}/100 "
-            f"no supera el umbral adaptativo de {adaptive_probability_threshold:.1%}."
-        )
-        decision_tone = "warning"
     levels = analysis.execution_levels
+    if system_decision is not None:
+        render_system_decision(system_decision)
+    else:
+        render_operational_signal(analysis, zone_snapshot)
     render_price_zones(analysis, zone_snapshot=zone_snapshot)
     legacy_zones_slot = st.empty()
     with legacy_zones_slot.container():
@@ -1576,33 +1642,26 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
     repository.resolve_live_model_observations(
         symbol=analysis.symbol,
         historical_bars=intraday,
+        historical_daily_bars=daily,
         current_as_of=datetime.now(timezone.utc),
     )
-    horizon_minutes = {
-        "1 Hora": 60,
-        "6 Horas": 360,
-        "1 Día": 1_440,
-        "1 Semana": 10_080,
-        "1 Mes": 43_200,
-        "6 Meses": 259_200,  # 180 calendar days, not 126 calendar days.
-    }
+    from portfolio_tracker.services.directional_collection import (
+        HORIZON_MINUTES, scenario_parameters,
+    )
     from portfolio_tracker.services.scenario_calibration import (
         make_scenario_contract, apply_scenario_calibration,
     )
     raw_probability_up = analysis.probability_up
-    raw_horizon_probabilities = {
-        horizon.label: horizon.probability_up for horizon in analysis.horizon_projections
-    }
-    scenario_contracts, calibration_results = {}, {}
+    calibration_results = {}
     calibrated_horizons = []
     calibration_cutoff = datetime.now(timezone.utc)
     for horizon in analysis.horizon_projections:
         contract = make_scenario_contract(
-            analysis.symbol, horizon, horizon_minutes[horizon.label], calibrated_parameters,
+            analysis.symbol, horizon, HORIZON_MINUTES[horizon.label],
+            scenario_parameters(calibrated_parameters),
         )
-        scenario_contracts[horizon.label] = contract
         samples = repository.live_scenario_calibration_samples(
-            analysis.symbol, horizon_minutes=horizon_minutes[horizon.label],
+            analysis.symbol, horizon_minutes=HORIZON_MINUTES[horizon.label],
             model_id=contract["model_id"], as_of=calibration_cutoff,
         )
         calibration = calibrate_scenarios(contract["probabilities"], samples)
@@ -1617,6 +1676,19 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         probability_status="Score heurístico preliminar",
         calibration_samples=0, calibration_brier_score=None,
     )
+    # The 15-session scenario must consume the final horizon map, after
+    # fundamental/news, cross-asset context and per-horizon calibration.  It is
+    # descriptive and does not alter the execution trigger or accounting state.
+    analysis = replace(
+        analysis,
+        daily_projection=calculate_15_day_projection(
+            last_price=analysis.last_price,
+            daily=analysis.daily_indicators,
+            probability_up=fifteen_day_up_score(analysis.horizon_projections),
+            risk_veto=analysis.risk_veto,
+            as_of=analysis.as_of,
+        ),
+    )
 
     from portfolio_tracker.services.operational_state import synchronize_position
     try:
@@ -1625,30 +1697,8 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         st.error(f"Motor bloqueado por integridad del estado: {exc}")
         return
 
-    emitted_at = datetime.now(timezone.utc)
-    source_closed_at = analysis.source_bar_closed_at
-    if live_mode and source_closed_at <= emitted_at < source_closed_at + timedelta(minutes=5):
-        for horizon in analysis.horizon_projections:
-            repository.record_live_model_observation(
-                symbol=analysis.symbol,
-                observed_at=emitted_at,
-                source_bar_at=source_closed_at,
-                reference_price=Decimal(str(analysis.last_price)),
-                raw_probability_up=Decimal(
-                    str(raw_horizon_probabilities[horizon.label] / 100)
-                ),
-                parameters_json=json.dumps(
-                    {
-                        **calibrated_parameters,
-                        "engine": horizon.engine_name,
-                        "feedback_version": 2,
-                        "scenario_contract": scenario_contracts[horizon.label],
-                        "probability_status": horizon.probability_status,
-                    },
-                    sort_keys=True,
-                ),
-                horizon_minutes=horizon_minutes[horizon.label],
-            )
+    # Emissions are deliberately independent of opening/refreshing Streamlit:
+    # the 11:00 NY headless collector writes one signed cohort per session.
     online_stats = repository.live_model_stats(analysis.symbol)
 
     with st.expander("Estado de datos y calibración", expanded=False):
@@ -1662,8 +1712,8 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             )
             st.caption(
                 f"Realimentación resuelta: {online_stats['resolved']} observaciones · "
-                f"acierto {online_stats['accuracy']:.1%} · "
-                f"umbral adaptativo {online_stats['adaptive_threshold']:.1%}."
+                f"acierto agregado diagnóstico {online_stats['accuracy']:.1%}. "
+                "El agregado mezcla horizontes y está desactivado para decisiones."
             )
             st.badge(
                 analysis.probability_status,
@@ -1706,14 +1756,27 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
     # Vista y PDFs: transformación dinámica exclusivamente en memoria. La única
     # escritura de zone_prediction_log pertenece al colector headless de las 11 NY.
     zone_snapshot = build_visual_zone_snapshot(analysis, repository=repository)
-    executive_pdf = build_executive_report(analysis, zone_snapshot=zone_snapshot)
-    technical_pdf = build_technical_report(analysis, zone_snapshot=zone_snapshot)
-    combined_pdf = build_probability_report(analysis, zone_snapshot=zone_snapshot)
+    system_decision = generate_decision(
+        analysis.symbol, analysis=analysis, repository=repository,
+        zone_snapshot=zone_snapshot,
+    )
+    executive_pdf = build_executive_report(
+        analysis, zone_snapshot=zone_snapshot, system_decision=system_decision,
+    )
+    technical_pdf = build_technical_report(
+        analysis, zone_snapshot=zone_snapshot, system_decision=system_decision,
+    )
+    combined_pdf = build_probability_report(
+        analysis, zone_snapshot=zone_snapshot, system_decision=system_decision,
+    )
     calibration_context = {
         "backtest_run": repository.latest_backtest_run(),
         "online_stats": online_stats,
     }
-    master_pdf = build_master_report(analysis, calibration_context, zone_snapshot=zone_snapshot)
+    master_pdf = build_master_report(
+        analysis, calibration_context, zone_snapshot=zone_snapshot,
+        system_decision=system_decision,
+    )
     timestamp = analysis.as_of.strftime("%Y%m%d_%H%M")
     with actions_slot.container(border=False):
         st.markdown("**Descargas del análisis actual**")
@@ -1760,9 +1823,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             _render_probability_executive(
                 analysis,
                 zone_snapshot=zone_snapshot,
-                adaptive_probability_threshold=float(
-                    online_stats["adaptive_threshold"]
-                ),
+                system_decision=system_decision,
             )
             render_cross_asset(analysis)
             with st.expander("Fundamentales y noticias", expanded=False):

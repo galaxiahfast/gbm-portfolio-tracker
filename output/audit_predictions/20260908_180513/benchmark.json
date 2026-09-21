@@ -1,0 +1,190 @@
+[
+  {
+    "symbol": "SMCI",
+    "status": "MEDIDO",
+    "timings": {
+      "download_cold_s": 2.955275400001483,
+      "download_warm_s": 0.8752279000000271,
+      "peer_cold_s": 0.47257119999994757,
+      "fundamental_cold_s": 2.7010897000000114,
+      "headless_compute_and_zones_s": 2.2568074999999226,
+      "ui_extracted_compute_and_zones_s": 1.9581873000006453,
+      "zone_repeat_s": 0.08817389999967418,
+      "warm_lower_bound_s": 3.1320353999999497,
+      "cold_serial_measured_s": 8.385743800001364
+    },
+    "as_of": "2026-09-08T18:06:53.202412+00:00",
+    "intraday_bars": 1615,
+    "daily_bars": 1254,
+    "same_zone_snapshot": true,
+    "same_forecast_content": true,
+    "headless_records": 6,
+    "ui_records": 6,
+    "hashes_equal": false,
+    "parameters": "defaults, same empty operational/account state",
+    "fundamental_available": true,
+    "correlation": {
+      "status": "available",
+      "symbol": "SMCI",
+      "peer": "NVDA",
+      "correlation": 0.5233731575043135,
+      "return_period": 20,
+      "return_samples": 20,
+      "daily_as_of": "2026-09-04",
+      "observed_at": "2026-09-08T18:06:53.202412+00:00",
+      "ratio": {
+        "value": 0.17186143448386917,
+        "mean50": 0.150085967608044,
+        "deviation_pct": 14.508662750333045
+      },
+      "rsi14": {
+        "SMCI": 62.65614640250257,
+        "NVDA": 60.390593225283666
+      },
+      "alerts": [
+        "Diario: NVDA marca nuevo máximo de 20 velas; SMCI no confirma."
+      ],
+      "intraday_as_of": "2026-09-08T18:05:00+00:00",
+      "proposed_impact": 0.0,
+      "applied_impact": 0.0,
+      "detail": "Retornos diarios cerrados; ajuste sólo del score heurístico, no de probabilidades calibradas.",
+      "daily_divergence": {
+        "alerts": [
+          "NVDA marca nuevo máximo de 20 velas; SMCI no confirma."
+        ],
+        "SMCI": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.9955899902195002,
+          "momentum": 0.029381203718109594
+        },
+        "NVDA": {
+          "high": true,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 1.0589382352468044,
+          "momentum": 0.010439533851280824
+        }
+      },
+      "intraday": {
+        "SMCI": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.8219670854464973,
+          "momentum": -0.007577642983311428
+        },
+        "NVDA": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.5821590995750769,
+          "momentum": -0.00028768507317633585
+        }
+      },
+      "input_sha256": "262b4b85513252f0112cb91acdc12f20c6478a357d0e6ac17da1e926cec81ef5",
+      "base_score": 50.1
+    },
+    "scope": "AST de las tres llamadas reales UI; no navegador, no calibración de otros horizontes ni renderizado/PDF.",
+    "inputs_sha256": "7fa5d6adad287833f7a8a4fbe656682e4cd5f9f067a8428578d2924655f28597"
+  },
+  {
+    "symbol": "NVDA",
+    "status": "MEDIDO",
+    "timings": {
+      "download_cold_s": 1.6439958999999362,
+      "download_warm_s": 0.8436339999989286,
+      "peer_cold_s": 0.3221880000000965,
+      "fundamental_cold_s": 2.3631941999992705,
+      "headless_compute_and_zones_s": 1.9100569999991421,
+      "ui_extracted_compute_and_zones_s": 1.8503211999995983,
+      "zone_repeat_s": 0.0876406000006682,
+      "warm_lower_bound_s": 2.7536909999980708,
+      "cold_serial_measured_s": 6.239435099998445
+    },
+    "as_of": "2026-09-08T18:07:02.991632+00:00",
+    "intraday_bars": 1615,
+    "daily_bars": 1254,
+    "same_zone_snapshot": true,
+    "same_forecast_content": true,
+    "headless_records": 6,
+    "ui_records": 6,
+    "hashes_equal": false,
+    "parameters": "defaults, same empty operational/account state",
+    "fundamental_available": true,
+    "correlation": {
+      "status": "available",
+      "symbol": "NVDA",
+      "peer": "SMCI",
+      "correlation": 0.5233731575024758,
+      "return_period": 20,
+      "return_samples": 20,
+      "daily_as_of": "2026-09-04",
+      "observed_at": "2026-09-08T18:07:02.991632+00:00",
+      "ratio": {
+        "value": 0.1718614344837805,
+        "mean50": 0.15008596760804546,
+        "deviation_pct": 14.508662750272826
+      },
+      "rsi14": {
+        "NVDA": 60.39059322530785,
+        "SMCI": 62.65614640258063
+      },
+      "alerts": [
+        "Diario: NVDA marca nuevo máximo de 20 velas; SMCI no confirma."
+      ],
+      "intraday_as_of": "2026-09-08T18:05:00+00:00",
+      "proposed_impact": 0.0,
+      "applied_impact": 0.0,
+      "detail": "Retornos diarios cerrados; ajuste sólo del score heurístico, no de probabilidades calibradas.",
+      "daily_divergence": {
+        "alerts": [
+          "NVDA marca nuevo máximo de 20 velas; SMCI no confirma."
+        ],
+        "NVDA": {
+          "high": true,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 1.0589382352468044,
+          "momentum": 0.010439533851666294
+        },
+        "SMCI": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.9955899902195002,
+          "momentum": 0.029381203718526594
+        }
+      },
+      "intraday": {
+        "NVDA": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.5821590995750769,
+          "momentum": -0.00028768507317633585
+        },
+        "SMCI": {
+          "high": false,
+          "low": false,
+          "up": false,
+          "down": false,
+          "rvol": 0.8219670854464973,
+          "momentum": -0.007577642983311428
+        }
+      },
+      "input_sha256": "262b4b85513252f0112cb91acdc12f20c6478a357d0e6ac17da1e926cec81ef5",
+      "base_score": 49.3
+    },
+    "scope": "AST de las tres llamadas reales UI; no navegador, no calibración de otros horizontes ni renderizado/PDF.",
+    "inputs_sha256": "046197a0383a14b99e8efec22fe619ae90d46d8c216412387c8cccb09440d659"
+  }
+]

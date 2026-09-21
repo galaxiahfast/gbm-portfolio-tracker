@@ -8,7 +8,15 @@ import pytest
 
 from portfolio_tracker.db import Database
 from portfolio_tracker.repository import PortfolioRepository
-from portfolio_tracker.services.model_observations import maturity, is_regular_close
+from portfolio_tracker.analytics.closed_bars import _calendar
+from portfolio_tracker.services.model_observations import (
+    LEGACY_POLICY,
+    LEGACY_VERSION,
+    POLICY,
+    forecast_digest,
+    maturity,
+    is_regular_close,
+)
 
 AT = datetime(2026, 8, 28, 19, tzinfo=timezone.utc)  # Friday 15:00 NY
 
@@ -32,6 +40,13 @@ def bars(*pairs):
     return pd.DataFrame(
         [{"Open": p, "High": p+1, "Low": p-1, "Close": p, "Volume": 100} for _,p in pairs],
         index=pd.DatetimeIndex([pd.Timestamp(t)-pd.Timedelta(minutes=5) for t,_ in pairs]),
+    )
+
+
+def daily_bars(*pairs):
+    return pd.DataFrame(
+        [{"Open": p, "High": p+1, "Low": p-1, "Close": p, "Volume": 100} for _,p in pairs],
+        index=pd.DatetimeIndex([pd.Timestamp(day) for day,_ in pairs]),
     )
 
 
@@ -118,22 +133,107 @@ def test_no_spot_no_nearest_no_future_no_duplicate_fill(repo):
     assert resolve(repo) == 1
 
 
-@pytest.mark.parametrize("at,minutes", [
-    (datetime(2026,9,4,19,tzinfo=timezone.utc), 4320),  # Monday Labor Day
-    (AT, 1440),  # Saturday
-    (datetime(2026,11,27,17,tzinfo=timezone.utc), 120),  # after 13:00 NY early close
-    (AT, 120),  # after regular close
+@pytest.mark.parametrize("at,minutes,expected", [
+    # Friday 15:00 NY + 120 trading minutes: one hour Friday, one hour Monday.
+    (AT, 120, "2026-08-31T14:30:00+00:00"),
+    # Black Friday has an early close at 13:00 NY; remaining time rolls Monday.
+    (datetime(2026,11,27,17,tzinfo=timezone.utc), 120, "2026-11-30T15:30:00+00:00"),
+    # Friday before Labor Day: the next session is Tuesday, not the holiday.
+    (datetime(2026,9,4,19,tzinfo=timezone.utc), 1_440, "2026-09-08T20:00:00+00:00"),
+    # Five future exchange sessions: Tue/Wed/Thu/Fri/Mon.
+    (datetime(2026,9,4,19,tzinfo=timezone.utc), 10_080, "2026-09-14T20:00:00+00:00"),
 ])
-def test_closed_market_target_is_invalid_never_rolled(repo, at, minutes):
+def test_v3_maturity_uses_trading_time_and_future_sessions(repo, at, minutes, expected):
     record(repo, at, minutes)
     due = maturity(at, minutes)
-    assert not is_regular_close(due)
-    assert repo.resolve_live_model_observations(symbol="SMCI", current_as_of=due.to_pydatetime(), historical_bars=bars((due,110))) == 0
-    assert row(repo)["resolution_status"] == "INVALID_MARKET_CLOSED"
-    assert row(repo)["outcome_price"] is None
-    assert row(repo)["resolution_sha256"]
+    assert due.isoformat() == expected
+    assert is_regular_close(due)
+    result = row(repo)
+    assert result["available_at"] == expected
+    assert result["horizon_policy"] == POLICY
+    assert result["integrity_version"] == 3
+
+
+def test_session_horizon_resolves_from_exact_daily_close(repo):
+    record(repo, AT, 1_440)
+    due = maturity(AT, 1_440)
+    assert repo.resolve_live_model_observations(
+        symbol="SMCI",
+        current_as_of=due.to_pydatetime(),
+        historical_bars=None,
+        historical_daily_bars=daily_bars((due.date(), 103)),
+    ) == 1
+    result = row(repo)
+    assert result["outcome_price"] == "103"
+    assert result["outcome_bar_at"] == due.isoformat()
+    assert result["outcome_source"] == "yfinance:1d:raw-close"
     assert repo.verify_live_model_observations() == (1, ())
-    assert repo.live_model_calibration_samples("SMCI", horizon_minutes=minutes) == ()
+
+
+@pytest.mark.parametrize("minutes,sessions", [
+    (1_440, 1),
+    (10_080, 5),
+    (43_200, 21),
+    (259_200, 126),
+])
+def test_all_daily_horizons_count_future_xnys_sessions(minutes, sessions):
+    due = maturity(AT, minutes)
+    # Session labels are exchange dates; use the explicit NY date for the cut.
+    observed_day = pd.Timestamp("2026-08-28")
+    due_day = pd.Timestamp(due.tz_convert("America/New_York").date())
+    schedule = _calendar(2026, 2028).schedule
+    future = schedule.loc[(schedule.index > observed_day) & (schedule.index <= due_day)]
+    assert len(future) == sessions
+    assert due == future.iloc[-1].close
+
+
+def test_unknown_non_session_horizon_fails_closed(repo):
+    with pytest.raises(ValueError, match="Horizonte sin contrato XNYS"):
+        record(repo, AT, 4_320)
+
+
+def test_v2_wall_clock_policy_remains_reproducible_for_audit():
+    assert maturity(AT + timedelta(seconds=17), 60, policy=LEGACY_POLICY) == pd.Timestamp(
+        "2026-08-28T20:05:00Z"
+    )
+
+
+def test_pending_v2_daily_identifier_keeps_legacy_intraday_resolution(repo):
+    observed = datetime(2026, 8, 27, 19, tzinfo=timezone.utc)  # Thursday 15:00 NY
+    due = maturity(observed, 1_440, policy=LEGACY_POLICY)      # Friday 15:00 NY
+    legacy = {
+        "symbol": "SMCI",
+        "observed_at": observed.isoformat(),
+        "available_at": due.isoformat(),
+        "horizon_minutes": 1_440,
+        "reference_price": "100",
+        "raw_probability_up": "0.8",
+        "predicted_direction": "UP",
+        "parameters_json": "{}",
+        "source_bar_at": observed.isoformat(),
+        "horizon_policy": LEGACY_POLICY,
+        "integrity_version": LEGACY_VERSION,
+        "created_at": observed.isoformat(),
+    }
+    legacy["observation_sha256"] = forecast_digest(legacy)
+    legacy["resolution_status"] = "PENDING"
+    with repo.database.transaction() as connection:
+        columns = tuple(legacy)
+        connection.execute(
+            f"INSERT INTO live_model_observations({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})",
+            tuple(legacy[column] for column in columns),
+        )
+    assert repo.resolve_live_model_observations(
+        symbol="SMCI",
+        current_as_of=due.to_pydatetime(),
+        historical_bars=bars((due, 101)),
+        historical_daily_bars=daily_bars((due.date(), 109)),
+    ) == 1
+    result = row(repo)
+    assert result["outcome_price"] == "101"
+    assert result["outcome_source"] == "yfinance:5m:raw-close"
+    assert repo.verify_live_model_observations() == (1, ())
 
 
 def test_emission_maturity_and_idempotency(repo):
@@ -143,7 +243,7 @@ def test_emission_maturity_and_idempotency(repo):
     result = row(repo)
     assert result["observed_at"] == emitted.isoformat()
     assert result["source_bar_at"] == AT.isoformat()
-    assert result["available_at"] == (AT+timedelta(minutes=65)).isoformat()
+    assert result["available_at"] == (AT+timedelta(minutes=60)).isoformat()
 
 
 def test_timezone_and_dst_contract(repo):
@@ -202,8 +302,8 @@ def test_upgrade_actual_v8_columns_preserves_legacy(tmp_path):
     assert row(repository)['resolution_status'] == 'LEGACY_UNVERIFIED'
     assert row(repository)['resolution_sha256'] is None
     assert repository.live_model_calibration_samples('OLD', horizon_minutes=60) == ()
-    assert repository.database.schema_version() == 9
-    assert list((tmp_path/'backups').glob('*before-v9*'))
+    assert repository.database.schema_version() == 12
+    assert list((tmp_path/'backups').glob('*before-v12*'))
 
 
 def test_concurrent_resolvers_finalize_only_once(repo):

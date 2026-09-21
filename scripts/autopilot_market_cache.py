@@ -38,6 +38,73 @@ class MarketCache:
             atomic_json(archive, envelope)
         atomic_json(path, envelope)
 
+    def artifact_refs(self, symbol):
+        """Verify and describe the immutable inputs used by this collection cut.
+
+        These references are stored in the signed forecast snapshot. A fully
+        mocked cache with no files remains feature-only; a partial or altered
+        production cache fails closed rather than claiming replay evidence.
+        """
+        root = self.folder / symbol
+        names = {"5m": "5m", "1d": "daily"}
+        paths = {key: root / f"{stem}.json" for key, stem in names.items()}
+        if not any(path.exists() for path in paths.values()):
+            return {}
+        if not all(path.exists() for path in paths.values()):
+            raise ValueError(f"Archivos de mercado incompletos para {symbol}.")
+        refs = {}
+        for key, stem in names.items():
+            current = json.loads(paths[key].read_text(encoding="utf-8"))
+            sha = current["sha256"]
+            if digest(current["payload"]) != sha:
+                raise ValueError(f"Caché de mercado alterada para {symbol}/{key}.")
+            archive = root / "archive" / f"{stem}_{sha}.json"
+            if not archive.is_file():
+                raise ValueError(f"Falta el archivo inmutable para {symbol}/{key}.")
+            saved = json.loads(archive.read_text(encoding="utf-8"))
+            if saved != current or digest(saved["payload"]) != sha:
+                raise ValueError(f"Archivo inmutable alterado para {symbol}/{key}.")
+            frame = pd.read_json(StringIO(saved["payload"]["frame"]), orient="table")
+            refs[key] = {
+                "archive_path": archive.relative_to(root).as_posix(),
+                "sha256": sha,
+                "source": saved["payload"]["source"],
+                "fetched_at": saved["payload"]["fetched_at"],
+                "rows": len(frame),
+            }
+        return refs
+
+    def verify_artifact_refs(self, symbol, refs):
+        """Recheck archived acquisition files from a later signed execution.
+
+        Unlike artifact_refs, this does not inspect moving `5m.json` or
+        `daily.json` pointers, so historical cuts remain independently
+        verifiable after the next market-data refresh.
+        """
+        root = (self.folder / symbol).resolve()
+        if set(refs) != {"5m", "1d"}:
+            return False
+        for key, ref in refs.items():
+            try:
+                sha = ref["sha256"]
+                archive = (root / ref["archive_path"]).resolve()
+                if (not isinstance(sha, str) or len(sha) != 64
+                        or any(char not in "0123456789abcdef" for char in sha)
+                        or not archive.is_relative_to(root)
+                        or archive.parent != root / "archive"
+                        or archive.name != f"{'5m' if key == '5m' else 'daily'}_{sha}.json"):
+                    return False
+                saved = json.loads(archive.read_text(encoding="utf-8"))
+                if saved["sha256"] != sha or digest(saved["payload"]) != sha:
+                    return False
+                frame = pd.read_json(StringIO(saved["payload"]["frame"]), orient="table")
+                if (len(frame) != ref["rows"] or saved["payload"]["source"] != ref["source"]
+                        or saved["payload"]["fetched_at"] != ref["fetched_at"]):
+                    return False
+            except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+                return False
+        return True
+
     def frames(self, symbol, now):
         clock = utc(now)
         local = clock.tz_convert(NY)

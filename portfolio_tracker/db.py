@@ -204,6 +204,9 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (7, "fundamentales_noticias_versionados"),
     (8, "estado_operativo_persistente"),
     (9, "observaciones_v2_resolucion_inmutable_causal"),
+    (10, "observaciones_v3_vencimientos_sesiones_xnys"),
+    (11, "objetivo_operativo_tp_sl_timeout_inmutable"),
+    (12, "checkpoints_operativos_incrementales_firmados"),
 )
 
 
@@ -294,6 +297,12 @@ class Database:
                             self._create_operational_history(connection)
                         elif version == 9:
                             self._secure_live_model_history(connection)
+                        elif version == 10:
+                            self._upgrade_live_model_session_policy(connection)
+                        elif version == 11:
+                            self._create_operational_model_outcomes(connection)
+                        elif version == 12:
+                            self._create_operational_model_outcomes(connection)
                     connection.execute(
                         """
                         INSERT INTO schema_migrations(version, name, applied_at)
@@ -315,6 +324,7 @@ class Database:
             self._create_fundamental_news_history(connection)
             self._create_operational_history(connection)
             self._secure_live_model_history(connection)
+            self._create_operational_model_outcomes(connection)
             connection.commit()
 
     @staticmethod
@@ -339,17 +349,29 @@ class Database:
         changed = " OR ".join(f"NEW.{name} IS NOT OLD.{name}" for name in (*FORECAST_FIELDS, "observation_sha256", "id"))
         connection.execute(f"""CREATE TRIGGER IF NOT EXISTS live_forecast_immutable
             BEFORE UPDATE ON live_model_observations
-            WHEN OLD.integrity_version = 2 AND ({changed})
+            WHEN OLD.integrity_version >= 2 AND ({changed})
             BEGIN SELECT RAISE(ABORT, 'live_forecast_immutable'); END""")
         connection.execute("""CREATE TRIGGER IF NOT EXISTS live_resolution_immutable
             BEFORE UPDATE ON live_model_observations
-            WHEN OLD.integrity_version = 2 AND OLD.resolution_status != 'PENDING'
+            WHEN OLD.integrity_version >= 2 AND OLD.resolution_status != 'PENDING'
             BEGIN SELECT RAISE(ABORT, 'live_resolution_immutable'); END""")
         connection.execute("""CREATE TRIGGER IF NOT EXISTS live_observation_no_delete
-            BEFORE DELETE ON live_model_observations WHEN OLD.integrity_version = 2
+            BEFORE DELETE ON live_model_observations WHEN OLD.integrity_version >= 2
             BEGIN SELECT RAISE(ABORT, 'live_observation_immutable'); END""")
         connection.execute("""CREATE INDEX IF NOT EXISTS idx_live_pending_maturity
             ON live_model_observations(symbol, resolution_status, available_at)""")
+
+    @staticmethod
+    def _upgrade_live_model_session_policy(connection: sqlite3.Connection) -> None:
+        """Additive v10: protect V3 rows without rewriting V2 evidence."""
+
+        for trigger in (
+            "live_forecast_immutable",
+            "live_resolution_immutable",
+            "live_observation_no_delete",
+        ):
+            connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        Database._secure_live_model_history(connection)
 
     @staticmethod
     def _create_operational_history(connection: sqlite3.Connection) -> None:
@@ -360,6 +382,127 @@ class Database:
             created_at TEXT NOT NULL
         )""")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_operational_symbol ON operational_events(symbol, id)")
+
+    @staticmethod
+    def _create_operational_model_outcomes(connection: sqlite3.Connection) -> None:
+        """Additive analytical target; never reads or writes ledger tables."""
+        connection.execute("""CREATE TABLE IF NOT EXISTS operational_model_outcomes (
+            observation_id INTEGER PRIMARY KEY REFERENCES live_model_observations(id),
+            target_version TEXT NOT NULL,
+            contract_sha256 TEXT NOT NULL,
+            resolution_status TEXT NOT NULL DEFAULT 'PENDING'
+                CHECK (resolution_status IN ('PENDING','RESOLVED')),
+            outcome TEXT CHECK (outcome IN ('TP_FIRST','SL_FIRST','TIMEOUT')),
+            exit_price TEXT,
+            exit_at TEXT,
+            exit_source TEXT,
+            evidence_sha256 TEXT,
+            evidence_json TEXT,
+            resolved_at TEXT,
+            outcome_sha256 TEXT,
+            scanned_through TEXT,
+            scan_evidence_sha256 TEXT,
+            scan_evidence_count INTEGER NOT NULL DEFAULT 0
+                CHECK (scan_evidence_count >= 0),
+            scan_evidence_json TEXT,
+            checkpoint_updated_at TEXT,
+            checkpoint_sha256 TEXT,
+            created_at TEXT NOT NULL
+        )""")
+        columns = {row["name"] for row in connection.execute(
+            "PRAGMA table_info(operational_model_outcomes)"
+        )}
+        additions = {
+            "evidence_sha256": "TEXT",
+            "evidence_json": "TEXT",
+            "scanned_through": "TEXT",
+            "scan_evidence_sha256": "TEXT",
+            "scan_evidence_count": "INTEGER NOT NULL DEFAULT 0",
+            "scan_evidence_json": "TEXT",
+            "checkpoint_updated_at": "TEXT",
+            "checkpoint_sha256": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE operational_model_outcomes ADD COLUMN {name} {definition}"
+                )
+        connection.execute("""CREATE INDEX IF NOT EXISTS idx_operational_model_pending
+            ON operational_model_outcomes(resolution_status, observation_id)""")
+        immutable = ("NEW.observation_id IS NOT OLD.observation_id OR "
+                     "NEW.target_version IS NOT OLD.target_version OR "
+                     "NEW.contract_sha256 IS NOT OLD.contract_sha256 OR "
+                     "NEW.created_at IS NOT OLD.created_at")
+        connection.execute(f"""CREATE TRIGGER IF NOT EXISTS operational_model_contract_immutable
+            BEFORE UPDATE ON operational_model_outcomes WHEN {immutable}
+            BEGIN SELECT RAISE(ABORT, 'operational_model_contract_immutable'); END""")
+        for trigger in (
+            "operational_model_insert_complete",
+            "operational_model_resolution_complete",
+        ):
+            connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        connection.execute("""CREATE TRIGGER operational_model_insert_complete
+            BEFORE INSERT ON operational_model_outcomes
+            WHEN NOT (
+                (NEW.resolution_status='PENDING' AND NEW.outcome IS NULL
+                 AND NEW.exit_price IS NULL AND NEW.exit_at IS NULL
+                 AND NEW.exit_source IS NULL AND NEW.evidence_sha256 IS NULL
+                 AND NEW.evidence_json IS NULL AND NEW.resolved_at IS NULL
+                 AND NEW.outcome_sha256 IS NULL
+                 AND NEW.scanned_through IS NULL
+                 AND NEW.scan_evidence_sha256 IS NULL
+                 AND NEW.scan_evidence_count=0
+                 AND NEW.scan_evidence_json IS NULL
+                 AND NEW.checkpoint_updated_at IS NULL
+                 AND NEW.checkpoint_sha256 IS NULL)
+            )
+            BEGIN SELECT RAISE(ABORT, 'operational_model_insert_incomplete'); END""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS operational_model_resolution_immutable
+            BEFORE UPDATE ON operational_model_outcomes
+            WHEN OLD.resolution_status != 'PENDING'
+            BEGIN SELECT RAISE(ABORT, 'operational_model_resolution_immutable'); END""")
+        connection.execute("""CREATE TRIGGER operational_model_resolution_complete
+            BEFORE UPDATE ON operational_model_outcomes
+            WHEN NOT (
+                (NEW.resolution_status='PENDING' AND NEW.outcome IS NULL
+                 AND NEW.exit_price IS NULL AND NEW.exit_at IS NULL
+                 AND NEW.exit_source IS NULL AND NEW.evidence_sha256 IS NULL
+                 AND NEW.evidence_json IS NULL AND NEW.resolved_at IS NULL
+                 AND NEW.outcome_sha256 IS NULL
+                 AND (
+                    (NEW.scan_evidence_count=0
+                     AND NEW.scanned_through IS NULL
+                     AND NEW.scan_evidence_sha256 IS NULL
+                     AND NEW.scan_evidence_json IS NULL
+                     AND NEW.checkpoint_updated_at IS NULL
+                     AND NEW.checkpoint_sha256 IS NULL)
+                    OR
+                    (NEW.scan_evidence_count>0
+                     AND NEW.scanned_through IS NOT NULL
+                     AND NEW.scan_evidence_sha256 IS NOT NULL
+                     AND NEW.scan_evidence_json IS NOT NULL
+                     AND NEW.checkpoint_updated_at IS NOT NULL
+                     AND NEW.checkpoint_sha256 IS NOT NULL)
+                 ))
+                OR
+                (NEW.resolution_status='RESOLVED' AND NEW.outcome IS NOT NULL
+                 AND NEW.exit_price IS NOT NULL AND NEW.exit_at IS NOT NULL
+                 AND NEW.exit_source IS NOT NULL AND NEW.evidence_sha256 IS NOT NULL
+                 AND NEW.evidence_json IS NOT NULL AND NEW.resolved_at IS NOT NULL
+                 AND NEW.outcome_sha256 IS NOT NULL
+                 AND NEW.scan_evidence_count>0
+                 AND NEW.scanned_through IS NOT NULL
+                 AND NEW.scan_evidence_sha256 IS NOT NULL
+                 AND NEW.scan_evidence_json IS NOT NULL
+                 AND NEW.checkpoint_updated_at IS NOT NULL
+                 AND NEW.checkpoint_sha256 IS NOT NULL
+                 AND NEW.evidence_sha256=NEW.scan_evidence_sha256
+                 AND NEW.evidence_json=NEW.scan_evidence_json)
+            )
+            BEGIN SELECT RAISE(ABORT, 'operational_model_resolution_incomplete'); END""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS operational_model_no_delete
+            BEFORE DELETE ON operational_model_outcomes
+            BEGIN SELECT RAISE(ABORT, 'operational_model_outcome_immutable'); END""")
 
     def _backup_before_migrations(
         self, connection: sqlite3.Connection, target_version: int

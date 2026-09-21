@@ -119,6 +119,132 @@ def build_zone_lists(analysis: "ProbabilityAnalysis"):
     return tuple(buys), tuple(sales)
 
 
+def _unique_ranked_levels(candidates, *, price, direction, limit=3):
+    """Return the closest distinct technical levels on one side of price."""
+    valid = []
+    seen = set()
+    for value, source in candidates:
+        value = _positive(value)
+        if value is None:
+            continue
+        if direction == "BELOW" and value >= price:
+            continue
+        if direction == "ABOVE" and value <= price:
+            continue
+        rounded = round(value, 2)
+        if rounded in seen:
+            continue
+        seen.add(rounded)
+        valid.append((value, source))
+    valid.sort(key=lambda item: abs(item[0] - price))
+    return valid[:limit]
+
+
+def build_adaptive_zone_lists(analysis: "ProbabilityAnalysis", original_snapshot=None):
+    """Build a visual-only operational map around the latest closed 5m price.
+
+    Crossed resistance levels are allowed to become support candidates. New
+    upside references come from current structure and ATR/Fibonacci extensions.
+    This function never mutates the signed 11:00 forward cohort or execution
+    levels; it only supplies the live UI/PDF during an open session.
+    """
+    price = _positive(getattr(analysis, "last_price", None))
+    if price is None:
+        return build_zone_lists(analysis), ()
+    original_buys, original_sales = (
+        (original_snapshot.buys, original_snapshot.sales)
+        if original_snapshot is not None
+        else build_zone_lists(analysis)
+    )
+    plan = getattr(analysis, "buy_levels", None)
+    pivots = getattr(analysis, "pivots", None)
+    fibonacci = getattr(analysis, "fibonacci", None)
+    atr = _positive(getattr(analysis, "atr_5m", None)) or price * 0.005
+
+    support_candidates = []
+    for zone in original_sales:
+        for value in (zone.high, zone.low):
+            if _positive(value) is not None and float(value) < price:
+                support_candidates.append((value, f"{zone.label.split(' · ', 1)[0]} superado · soporte potencial"))
+    support_candidates.extend([
+        (getattr(analysis, "nearest_support", None), "Soporte técnico más cercano"),
+        (getattr(analysis, "structural_support", None), "Estructura 4h / 1h"),
+        (getattr(pivots, "s1", None), "Pivote diario S1"),
+        (getattr(pivots, "s2", None), "Pivote diario S2"),
+        (getattr(fibonacci, "level_382", None), "Fibonacci 0.382"),
+        (getattr(fibonacci, "level_500", None), "Fibonacci 0.500"),
+        (getattr(fibonacci, "level_618", None), "Fibonacci 0.618"),
+        (getattr(plan, "entry_high", None), "Entrada original · referencia histórica"),
+        (getattr(plan, "entry_low", None), "Entrada original · referencia histórica"),
+    ])
+    for zone in original_buys:
+        support_candidates.extend(((zone.high, zone.source), (zone.low, zone.source)))
+    supports = _unique_ranked_levels(support_candidates, price=price, direction="BELOW")
+    # Ensure the live map never becomes empty when the old plan is far away.
+    for multiple, label in ((0.75, "Retroceso ATR 5m 0.75x"), (1.5, "Retroceso ATR 5m 1.5x"),
+                            (2.25, "Retroceso ATR 5m 2.25x")):
+        if len(supports) >= 3:
+            break
+        supports = _unique_ranked_levels(
+            supports + [(price - multiple * atr, label)], price=price, direction="BELOW"
+        )
+
+    reference = ZoneSnapshot(pd.Timestamp.utcnow(), tuple(original_buys), tuple(original_sales), ())
+    extended = projected_extended_levels(analysis, reference)
+    resistance_candidates = [
+        (getattr(analysis, "structural_resistance", None), "Estructura 4h / 1h"),
+        (getattr(pivots, "r1", None), "Pivote diario R1"),
+        (getattr(pivots, "r2", None), "Pivote diario R2"),
+        (getattr(analysis, "weekly_resistance", None), "Resistencia semanal"),
+        (getattr(analysis, "bollinger_upper", None), "Banda superior de Bollinger 5m"),
+        (getattr(plan, "take_profit_1", None), "TP1 original"),
+        (getattr(plan, "take_profit_2", None), "TP2 original"),
+    ]
+    resistance_candidates.extend((level.price, level.source) for level in extended)
+    resistances = _unique_ranked_levels(resistance_candidates, price=price, direction="ABOVE")
+    for multiple, label in ((1.0, "Extensión ATR 5m 1.0x"), (1.75, "Extensión ATR 5m 1.75x"),
+                            (2.5, "Extensión ATR 5m 2.5x")):
+        if len(resistances) >= 3:
+            break
+        resistances = _unique_ranked_levels(
+            resistances + [(price + multiple * atr, label)], price=price, direction="ABOVE"
+        )
+
+    buy_labels = ("Zona 1 · Soporte inmediato", "Zona 2 · Retroceso moderado",
+                  "Zona 3 · Soporte inferior")
+    sale_labels = ("Objetivo 1 · Resistencia inmediata", "Objetivo 2 · Extensión alcista",
+                   "Objetivo 3 · Resistencia superior")
+    buys = tuple(
+        DisplayZone(label, value, value, source, None, "bajista")
+        for label, (value, source) in zip(buy_labels, supports)
+    )
+    sales = tuple(
+        DisplayZone(label, value, value, source, None, "alcista")
+        for label, (value, source) in zip(sale_labels, resistances)
+    )
+    return (buys, sales), tuple(extended)
+
+
+def build_adaptive_zone_snapshot(analysis, *, now=None, original_snapshot=None):
+    """Re-estimate six current-price zones without persisting forward evidence."""
+    from portfolio_tracker.analytics.closed_bars import utc
+
+    clock = utc(now)
+    (buys, sales), extended = build_adaptive_zone_lists(analysis, original_snapshot)
+    zones = tuple(buys) + tuple(sales)
+    estimates = estimate_conditional_reach(
+        analysis.intraday_indicators,
+        analysis.daily_indicators,
+        analysis.last_price,
+        [(zone.low, zone.high, "BELOW") for zone in buys]
+        + [(zone.low, zone.high, "ABOVE") for zone in sales],
+        now=clock,
+        matching="weighted",
+        min_sessions=12,
+    )
+    return ZoneSnapshot(clock, tuple(buys), tuple(sales), tuple(estimates), extended)
+
+
 def distance_to_zone(price, zone):
     """Signed USD and percent to the nearest boundary; zero means inside."""
     price = _positive(price)
@@ -382,27 +508,8 @@ def build_visual_zone_snapshot(analysis, *, repository=None, now=None, original_
     if bounds is None or clock < bounds[1] or clock >= bounds[2]:
         frozen = replace(original, evaluated_at=clock)
         return replace(frozen, extended_levels=projected_extended_levels(analysis, frozen))
-    pairs = tuple((zone, "BELOW") for zone in original.buys) + tuple(
-        (zone, "ABOVE") for zone in original.sales
+    # During the active session the operational display follows the latest
+    # closed 5m price. The signed forward cohort remains untouched in SQLite.
+    return build_adaptive_zone_snapshot(
+        analysis, now=clock, original_snapshot=original
     )
-    assessments = calculate_dynamic_visual_zone(
-        analysis.last_price,
-        clock,
-        bounds[2],
-        pairs,
-        intraday=analysis.intraday_indicators,
-        daily=analysis.daily_indicators,
-        original_estimates=original.estimates,
-        min_sessions=12,
-    )
-    zones = tuple(
-        replace(zone, label=assessment.label)
-        for (zone, _), assessment in zip(pairs, assessments)
-    )
-    snapshot = ZoneSnapshot(
-        clock,
-        zones[:3],
-        zones[3:],
-        tuple(assessment.estimate for assessment in assessments),
-    )
-    return replace(snapshot, extended_levels=projected_extended_levels(analysis, snapshot))
