@@ -26,13 +26,25 @@ HORIZON_MINUTES = {
 }
 
 
-def scenario_parameters(parameters):
+def scenario_parameters(parameters, *, protocol=COLLECTION_PROTOCOL):
     """Keep the same immutable model identity in UI calibration and headless emission."""
-    return {**parameters, "observation_protocol": COLLECTION_PROTOCOL}
+    return {**parameters, "observation_protocol": protocol}
 
 
-def fixed_cut_forecasts(analysis, parameters, observed_at: datetime, *, input_artifacts=None):
-    """Validate a real, fresh closed bar; never backdate a missed fixed cut."""
+def cut_forecasts(
+    analysis,
+    parameters,
+    observed_at: datetime,
+    *,
+    protocol=COLLECTION_PROTOCOL,
+    input_artifacts=None,
+):
+    """Build one signed six-horizon contract from an exact 11 NY cut.
+
+    ``protocol`` is part of model identity.  Historical replay therefore uses
+    the same contract builder without masquerading as live forward evidence.
+    This function performs no database writes.
+    """
     observed = utc_timestamp(observed_at)
     local = observed.tz_convert(NY)
     if not time(11) <= local.time() < time(11, 20):
@@ -45,9 +57,9 @@ def fixed_cut_forecasts(analysis, parameters, observed_at: datetime, *, input_ar
     horizons = {item.label: item for item in analysis.horizon_projections}
     if set(horizons) != set(HORIZON_MINUTES):
         raise ValueError("Se requieren los seis horizontes direccionales completos.")
-    model_parameters = scenario_parameters(parameters)
+    model_parameters = scenario_parameters(parameters, protocol=protocol)
     replay = build_replay_snapshot(
-        analysis, observed_at=observed_at, protocol=COLLECTION_PROTOCOL,
+        analysis, observed_at=observed_at, protocol=protocol,
         input_artifacts=input_artifacts,
     )
     rows = []
@@ -67,7 +79,7 @@ def fixed_cut_forecasts(analysis, parameters, observed_at: datetime, *, input_ar
                 "scenario_contract": contract,
                 "operational_contract": operational_contract,
                 "primary_validation_target": operational_contract["version"],
-                "collection_protocol": COLLECTION_PROTOCOL,
+                "collection_protocol": protocol,
                 "scheduled_cut_ny": "11:00",
                 "session_date": local.date().isoformat(),
                 "replay": replay,
@@ -75,6 +87,17 @@ def fixed_cut_forecasts(analysis, parameters, observed_at: datetime, *, input_ar
             }, sort_keys=True, allow_nan=False),
         ))
     return rows
+
+
+def fixed_cut_forecasts(analysis, parameters, observed_at: datetime, *, input_artifacts=None):
+    """Validate a real, fresh closed bar; never backdate a missed live cut."""
+    return cut_forecasts(
+        analysis,
+        parameters,
+        observed_at,
+        protocol=COLLECTION_PROTOCOL,
+        input_artifacts=input_artifacts,
+    )
 
 
 def record_fixed_directional(repository, analysis, parameters, observed_at: datetime,

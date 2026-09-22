@@ -3,10 +3,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from io import BytesIO
 
+import numpy as np
+import pytest
 from pypdf import PdfReader
 from streamlit.testing.v1 import AppTest
 
 from portfolio_tracker.analytics.expected_value import calculate_expectation
+from portfolio_tracker.analytics.horizon_models import FEATURE_NAMES, _sha
 from portfolio_tracker.analytics.horizon_selector import select_best_horizon
 from portfolio_tracker.analytics.technical_probability import TechnicalSignal
 from portfolio_tracker.db import Database
@@ -26,6 +29,30 @@ def repository(tmp_path):
     result = PortfolioRepository(Database(tmp_path / "portfolio.db"))
     result.database.initialize()
     result.ensure_initial_capital()
+    return result
+
+
+def _approved_operational_result(horizon, probabilities):
+    temperature = 1.5
+    weights = np.zeros((len(FEATURE_NAMES) + 1, 3))
+    weights[0] = np.log(probabilities) * temperature
+    result = {
+        "horizon": horizon,
+        "status": "APPROVED_SEALED_HOLDOUT_CALIBRATED",
+        "promotable": True,
+        "score_semantics": "HISTORICAL_OOS_CALIBRATED_PRELIMINARY",
+        "feature_names": list(FEATURE_NAMES),
+        "feature_schema_sha256": _sha(list(FEATURE_NAMES)),
+        "final_holdout": {"metrics": {"samples": 80, "brier": 0.2, "baseline_brier": 0.4}},
+        "model": {
+            "calibration": {"method": "MULTICLASS_TEMPERATURE_SCALING_V1", "temperature": temperature},
+            "intercept_and_coefficients": weights.tolist(),
+            "imputation_medians": [0.0] * len(FEATURE_NAMES),
+            "standardization_means": [0.0] * len(FEATURE_NAMES),
+            "standardization_scales": [1.0] * len(FEATURE_NAMES),
+        },
+    }
+    result["result_sha256"] = _sha(result)
     return result
 
 
@@ -99,7 +126,7 @@ def test_veto_always_waits_and_missing_evidence_is_disclosed(tmp_path):
     assert "Veto" in " ".join(decision.reasons)
 
 
-def test_buy_requires_every_gate_and_uses_real_account_capital(tmp_path):
+def test_directional_calibration_alone_does_not_authorize_buy(tmp_path):
     repo = repository(tmp_path)
     analysis = _analysis()
     horizons = tuple(
@@ -121,12 +148,48 @@ def test_buy_requires_every_gate_and_uses_real_account_capital(tmp_path):
     decision = generate_decision(
         "SMCI", analysis=analysis, repository=repo, zone_snapshot=snapshot,
     )
+    assert decision.action == "ESPERAR"
+    assert decision.position_size == 0
+    assert decision.expected_value_per_share is None
+    assert "TP/SL/timeout" in decision.explanation
+    assert decision.brier_touch is None and decision.brier_close is None
+
+
+def test_buy_selects_highest_net_first_hit_ev_not_highest_directional_score(tmp_path):
+    repo = repository(tmp_path)
+    base = _analysis()
+    horizons = tuple(
+        replace(item, probability_up=(90 if item.label == "1 Hora" else 60),
+                probability_range=5, probability_down=(5 if item.label == "1 Hora" else 35))
+        for item in base.horizon_projections
+    )
+    analysis = replace(
+        base, horizon_projections=horizons,
+        execution_levels=replace(base.execution_levels, take_profit_1=47.0),
+        signal=TechnicalSignal.BUY, activation_trigger_met=True,
+        execution_plan_conditional=False, risk_veto=False,
+        fundamental_risk_veto=False, signal_rejected=False,
+        macro_permission="LONG_ONLY", position_state="FLAT",
+    )
+    models = {
+        "1 Hora": _approved_operational_result("1 Hora", (0.60, 0.25, 0.15)),
+        "1 Semana": _approved_operational_result("1 Semana", (0.85, 0.10, 0.05)),
+    }
+    decision = generate_decision(
+        "SMCI", analysis=analysis, repository=repo, operational_models=models,
+    )
     assert decision.action == "COMPRAR"
+    assert decision.horizon == "1 Semana"
     assert decision.position_size > 0
     assert Decimal(str(decision.monetary_risk)) <= Decimal("921.05") * Decimal("0.02")
     assert decision.reward_risk >= 1.5
     assert decision.expected_value_per_share > 0
-    assert decision.brier_touch is None and decision.brier_close is None
+    assert decision.expected_value_total > 0
+    assert decision.adjusted_win_probability == 0.85
+    assert decision.sl_first_probability == pytest.approx(0.10)
+    assert decision.timeout_probability == pytest.approx(0.05)
+    assert decision.directional_brier is None
+    assert decision.operational_brier == 0.2
 
 
 def test_preliminary_decision_has_no_probability_or_expected_value(tmp_path):

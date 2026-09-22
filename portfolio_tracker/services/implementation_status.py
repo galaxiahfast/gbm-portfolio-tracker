@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-LAST_VERIFIED_TESTS = 89
-LAST_VERIFIED_DATE = "2026-08-31"
+LAST_VERIFIED_TESTS = 419
+LAST_VERIFIED_DATE = "2026-09-22"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +42,10 @@ MILESTONES = (
     ImplementationMilestone("Análisis fundamental y noticias", "Estados financieros, eventos, flujo informativo versionado, ponderación direccional y veto SHA-256.", "complete", 1.0),
     ImplementationMilestone("Calibración estadística y backtesting", "Búsqueda anidada de parámetros, OOS intacto, ATR, costes, error Brier, veto de capital y huella auditable.", "complete", 1.5),
     ImplementationMilestone("Realimentación progresiva intradía", "Observaciones versionadas, resolución por sesiones XNYS, diagnóstico agregado no operativo y SHA-256.", "complete", 1.0),
+    ImplementationMilestone("Replay causal histórico", "Cortes 11:00 NY punto-en-tiempo, seis contratos y etiquetas de cierre/TP-SL-timeout separadas del OOS live.", "complete", 1.0),
+    ImplementationMilestone("Modelos regularizados por horizonte", "Clasificadores L2 aislados por símbolo/horizonte, split 60/20/20 purgado y holdout exclusivo; promoción vetada sin muestra suficiente.", "complete", 1.0),
+    ImplementationMilestone("Walk-forward anidado y holdout sellado", "Selección L2 interna, evaluación externa, embargo XNYS por horizonte y apertura única del holdout tras congelar el protocolo.", "complete", 1.0),
+    ImplementationMilestone("Calibración condicionada por habilidad OOS", "Temperatura multiclase ajustada en OOF temprano, validada en OOF posterior y evaluada contra score crudo y baseline en holdout sellado.", "complete", 1.0),
 )
 
 

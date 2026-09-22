@@ -38,23 +38,35 @@ def render_system_decision(decision):
             help="La segunda cifra solo es distinta de cero cuando COMPRAR está autorizado.",
         )
         risk.metric(
-            "Riesgo / expectativa",
+            "Riesgo / expectativa neta",
             f"${decision.monetary_risk:,.2f} / "
             + ("N/D" if decision.expected_value_total is None else f"${decision.expected_value_total:+,.2f}"),
             help=f"Presupuesto máximo de riesgo: ${decision.risk_budget:,.2f}.",
         )
-        probability = (
-            "N/D · evidencia insuficiente"
-            if decision.adjusted_win_probability is None
-            else f"{decision.adjusted_win_probability:.1%}"
-        )
-        st.caption(
-            f"Probabilidad direccional ajustada: {probability} · Brier direccional OOS: "
-            f"{'N/D' if decision.directional_brier is None else f'{decision.directional_brier:.4f}'} · "
-            f"Baseline: {'N/D' if decision.directional_baseline_brier is None else f'{decision.directional_baseline_brier:.4f}'} · "
-            f"{decision.validated_sessions} muestras holdout. {decision.calibration_status}. "
-            "El Brier de zonas no interviene en esta decisión."
-        )
+        if decision.adjusted_win_probability is None:
+            st.caption(
+                "TP primero / SL primero / timeout: N/D · sin modelo operativo "
+                "calibrado y aprobado. Los scores direccionales no autorizan la compra."
+            )
+        else:
+            brier = (
+                "N/D" if decision.operational_brier is None
+                else f"{decision.operational_brier:.4f}"
+            )
+            baseline = (
+                "N/D" if decision.operational_baseline_brier is None
+                else f"{decision.operational_baseline_brier:.4f}"
+            )
+            st.caption(
+                f"TP primero {decision.adjusted_win_probability:.1%} · "
+                f"SL primero {decision.sl_first_probability:.1%} · "
+                f"timeout {decision.timeout_probability:.1%} · "
+                f"Brier operativo OOS {brier} · baseline {baseline} · "
+                f"{decision.validated_sessions} muestras holdout. "
+                f"Costes estimados por lado {decision.cost_rate_per_side:.2%}; "
+                "timeout valorado conservadoramente al stop. "
+                "Un gap puede exceder la pérdida estimada."
+            )
         st.markdown("**Condiciones de activación LONG**")
         st.table([
             {

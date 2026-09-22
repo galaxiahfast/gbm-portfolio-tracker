@@ -417,7 +417,7 @@ def _system_decision_story(decision, styles):
             "N/D" if decision.stop_loss is None else f"${decision.stop_loss:.2f}",
             "N/D" if decision.take_profit is None else f"${decision.take_profit:.2f}",
         ],
-        ["Acciones nuevas", "Riesgo monetario", "Valor esperado", "R:R", "Muestras"],
+        ["Acciones nuevas", "Riesgo monetario", "EV neta", "R:R neto", "Muestras"],
         [
             str(decision.position_size),
             f"${decision.monetary_risk:.2f}",
@@ -434,9 +434,14 @@ def _system_decision_story(decision, styles):
             _safe_text(
                 f"Capital ${decision.total_capital:.2f}; efectivo ${decision.cash_available:.2f}; "
                 f"posición actual {decision.current_shares:g}; concentración {decision.concentration:.1%}; "
-                f"Brier direccional OOS {value(decision.directional_brier, '.4f')}; "
-                f"baseline {value(decision.directional_baseline_brier, '.4f')}; "
-                f"estado {decision.calibration_status}. El Brier de zonas no interviene en la decisión. "
+                f"TP primero {value(decision.adjusted_win_probability, '.1%')}; "
+                f"SL primero {value(decision.sl_first_probability, '.1%')}; "
+                f"timeout {value(decision.timeout_probability, '.1%')}; "
+                f"Brier operativo OOS {value(decision.operational_brier, '.4f')}; "
+                f"baseline {value(decision.operational_baseline_brier, '.4f')}; "
+                f"costes por lado {value(decision.cost_rate_per_side, '.2%')}; "
+                f"estado {decision.calibration_status}. El timeout se valora al stop; "
+                "los gaps pueden agravar la pérdida. El Brier de zonas no interviene. "
                 "Recomendacion informativa; ejecucion manual."
             ),
             styles["BodySmall"],

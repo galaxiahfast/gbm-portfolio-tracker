@@ -27,7 +27,12 @@ imputarse artificialmente como acierto o fallo.
 4. Comprueba que el instalador muestre las tres tareas registradas. Si hay un error, revisa cuáles quedaron instaladas; no se afirma que la instalación haya terminado.
 5. Abre el Programador de tareas y localiza GBM_Forward_Collector, GBM_Forward_Resolver, GBM_Forward_Catchup y GBM_Backup_Daily. Usa “Ejecutar” para una comprobación y consulta el log propio de cada trabajo.
 
-**El instalador está entregado, no ejecutado en modo de registro.** Se generaron los XML en modo Preview y el componente de Windows validó su esquema. Ninguna tarea quedó instalada durante el desarrollo.
+La instalación es un estado local de Windows, no una propiedad del repositorio.
+En este equipo las cuatro tareas fueron registradas y quedaron en estado
+`Ready` el 22 de septiembre de 2026 en modo `InteractiveToken`; por ello el
+usuario de Windows debe mantener la sesión iniciada. Al mover el proyecto o
+restaurarlo en otro equipo hay que ejecutar nuevamente el instalador y verificar
+las tareas en el Programador de tareas.
 
 No se guardan contraseñas en archivos del proyecto, logs ni argumentos del proceso. El instalador entrega la credencial en memoria al servicio de Windows; este administra la credencial del trabajo. Las tareas corren con privilegios mínimos, no con una consola de trading abierta. Si cambia la contraseña de Windows, actualiza la credencial de las tareas.
 

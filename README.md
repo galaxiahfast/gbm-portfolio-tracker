@@ -124,6 +124,30 @@ La interfaz superior separa tres experiencias sin repetir las descargas:
 - **Vista Técnica Avanzada (Completa):** conserva los paneles intradiario, diario/semanal y mensual/anual, todas las gráficas técnicas y la tabla auditable de aportes del motor.
 - **Calibración y backtesting:** prueba automáticamente rejillas de umbral, múltiplo ATR y riesgo dentro del entrenamiento; congela el ganador y lo valida una sola vez en el tramo fuera de muestra.
 
+El constructor de [replay causal histórico](docs/historical_causal_replay.md)
+reproduce cortes de las 11:00 NY con velas cerradas, congela features y los seis
+horizontes, y etiqueta posteriormente el cierre y el primer evento
+`TP_FIRST / SL_FIRST / TIMEOUT`. Sus artefactos SHA-256 permanecen separados de
+las observaciones forward reales y nunca cuentan como muestra live/OOS.
+
+El [entrenador regularizado por horizonte](docs/regularized_horizon_models.md)
+ajusta un clasificador multinomial L2 independiente para cada símbolo y cada
+horizonte. Usa split cronológico 60/20/20, purga etiquetas aún desconocidas,
+selecciona la penalización solo en calibración y reserva el holdout para Brier y
+log-loss finales. Con menos de 300 resultados por horizonte se niega a promover
+un modelo; los softmax entrenados siguen declarándose scores no calibrados.
+
+La [validación walk-forward anidada](docs/nested_walk_forward.md) añade folds
+internos para seleccionar L2, folds externos expansivos para medir estabilidad,
+embargo XNYS dependiente del horizonte y un holdout final comprometido por
+SHA-256. El holdout solo se abre después de congelar y aprobar el protocolo de
+desarrollo; si este falla, permanece sellado y sin métricas.
+Solo los modelos que superan el baseline en los folds externos pasan a
+calibración multiclase por temperatura. El calibrador se ajusta con predicciones
+fuera de muestra tempranas y se verifica con predicciones posteriores; exige
+mejora frente al score sin ajustar y al baseline. La evaluación final conserva
+el holdout sellado hasta que toda la selección queda congelada.
+
 Las pestañas son dinámicas: la vista técnica solo construye sus gráficas cuando se abre. El PDF se genera en memoria con ReportLab, no escribe datos del usuario en el repositorio e incluye la trayectoria vectorial de 15 sesiones, Bandas de Bollinger/VWAP, Estocástico RSI, MACD intradía y estructura EMA diaria construidos desde los mismos DataFrames reales de la vista avanzada, además del bloque estructurado para revisión por otra IA.
 
 Justo encima de las tres pestañas, la barra del predictor ofrece cuatro descargas consistentes con el mismo corte de mercado: Vista Ejecutiva, Vista Técnica Avanzada, PDF combinado de ambas y PDF Maestro. El maestro añade la última calibración/backtesting registrada, sus parámetros, métricas OOS, realimentación progresiva y verificación SHA-256. El PDF técnico incorpora quince paneles disponibles: Bollinger/VWAP, Estocástico RSI, MACD 5m y 1h, ADX/+DI/-DI, OBV, estructuras EMA diaria/semanal/mensual, MACD diario/semanal/mensual, Ichimoku diario y dos paneles de patrones chartistas (5m y diario). Si una temporalidad todavía no reúne observaciones suficientes, el reporte lo indica sin cancelar las demás páginas.
