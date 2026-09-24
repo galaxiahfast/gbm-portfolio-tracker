@@ -17,10 +17,14 @@ from pathlib import Path
 import pandas as pd
 
 from .closed_bars import NY, _calendar
-from ..services.model_observations import POLICY, canonical, is_regular_close, maturity, utc_timestamp
+from .temporal_contract import ANCHOR_VERSION, first_evaluable_open, is_actionable_emission
+from ..services.model_observations import (
+    POLICY, PREVIOUS_POLICY, canonical, is_regular_close, maturity, utc_timestamp,
+)
 from ..services.scenario_calibration import engine_revision
 
-TARGET_VERSION = "TP_FIRST_SL_FIRST_TIMEOUT_V1"
+LEGACY_TARGET_VERSION = "TP_FIRST_SL_FIRST_TIMEOUT_V1"
+TARGET_VERSION = "TP_FIRST_SL_FIRST_TIMEOUT_V2"
 SAME_BAR_POLICY = "SL_FIRST_CONSERVATIVE"
 ENTRY_POLICY = "REFERENCE_CLOSED_PRICE_ASSUMED"
 GAP_POLICY = "SL_AT_OPEN_TP_AT_TARGET_V1"
@@ -103,8 +107,8 @@ def make_operational_contract(symbol, horizon, horizon_minutes, analysis, observ
     """Freeze one hypothetical trade plan before any outcome is known."""
     observed = utc_timestamp(observed_at)
     entry_at = utc_timestamp(analysis.source_bar_closed_at)
-    evaluation_start = observed.ceil("5min")
-    timeout = maturity(evaluation_start, int(horizon_minutes))
+    evaluation_start = first_evaluable_open(observed)
+    timeout = maturity(observed, int(horizon_minutes))
     plan = analysis.execution_levels
     side = str(plan.direction).upper()
     entry = _finite_price(analysis.last_price, "Entrada")
@@ -129,6 +133,7 @@ def make_operational_contract(symbol, horizon, horizon_minutes, analysis, observ
         "symbol": str(symbol).strip().upper(), "engine": horizon.engine_name,
         "horizon_minutes": int(horizon_minutes), "parameters": parameters,
         "horizon_policy": POLICY, "engine_revision": engine_revision(),
+        "anchor_version": ANCHOR_VERSION,
         "target": TARGET_VERSION, "labeler_revision": labeler_revision(),
         "labeler_semantics": LABELER_SEMANTICS,
         "gap_policy": GAP_POLICY, "evidence_policy": EVIDENCE_POLICY,
@@ -155,7 +160,7 @@ def make_operational_contract(symbol, horizon, horizon_minutes, analysis, observ
         "evaluation_starts_at": evaluation_start.isoformat(),
         "timeout_at": timeout.isoformat(),
         "entry_policy": ENTRY_POLICY, "same_bar_policy": SAME_BAR_POLICY,
-        "eligible_at_emission": eligible,
+        "eligible_at_emission": eligible and is_actionable_emission(observed, entry_at),
     }
     contract["contract_sha256"] = hashlib.sha256(canonical(contract).encode()).hexdigest()
     validate_operational_contract(contract)
@@ -163,15 +168,21 @@ def make_operational_contract(symbol, horizon, horizon_minutes, analysis, observ
 
 
 def validate_operational_contract(contract):
-    if not isinstance(contract, dict) or contract.get("version") != TARGET_VERSION:
+    if not isinstance(contract, dict) or contract.get("version") not in {
+        LEGACY_TARGET_VERSION, TARGET_VERSION,
+    }:
         raise ValueError("Contrato operativo desconocido.")
     unsigned = dict(contract)
     supplied = unsigned.pop("contract_sha256", None)
     if supplied != hashlib.sha256(canonical(unsigned).encode()).hexdigest():
         raise ValueError("Firma del contrato operativo inconsistente.")
     model = contract["model"]
-    if model.get("target") != TARGET_VERSION or model.get("horizon_policy") != POLICY:
+    version = contract["version"]
+    expected_policy = POLICY if version == TARGET_VERSION else PREVIOUS_POLICY
+    if model.get("target") != version or model.get("horizon_policy") != expected_policy:
         raise ValueError("Modelo operativo incompatible.")
+    if version == TARGET_VERSION and model.get("anchor_version") != ANCHOR_VERSION:
+        raise ValueError("Anclaje operativo incompatible.")
     revision = model.get("labeler_revision")
     if (not isinstance(revision, str) or len(revision) != 64
             or any(char not in "0123456789abcdef" for char in revision)
@@ -201,11 +212,17 @@ def validate_operational_contract(contract):
         contract["observed_at"], contract["entry_at"],
         contract["evaluation_starts_at"], contract["timeout_at"],
     ))
+    expected_start = (first_evaluable_open(observed) if version == TARGET_VERSION
+                      else observed.ceil("5min"))
+    expected_timeout = maturity(
+        observed if version == TARGET_VERSION else expected_start,
+        int(model["horizon_minutes"]), policy=expected_policy,
+    )
     if (entry_at > observed or evaluation_start < observed
-            or evaluation_start != observed.ceil("5min") or timeout != maturity(
-        evaluation_start, int(model["horizon_minutes"]), policy=model["horizon_policy"]
-    )):
+            or evaluation_start != expected_start or timeout != expected_timeout):
         raise ValueError("Tiempos del contrato operativo inconsistentes.")
+    if version == TARGET_VERSION and contract.get("eligible_at_emission") and not is_actionable_emission(observed, entry_at):
+        raise ValueError("Una emisión fuera de corte no puede ser operativa.")
     if contract.get("entry_policy") != ENTRY_POLICY or contract.get("same_bar_policy") != SAME_BAR_POLICY:
         raise ValueError("Política de ejecución operativa desconocida.")
     return scores
@@ -300,7 +317,7 @@ def scan_operational_outcome(
             "take_profit": float(contract.take_profit),
             "entry_at": utc_timestamp(contract.source_bar_at).isoformat(),
             "observed_at": observed.isoformat(),
-            "evaluation_starts_at": observed.ceil("5min").isoformat(),
+            "evaluation_starts_at": first_evaluable_open(observed).isoformat(),
             "timeout_at": utc_timestamp(contract.expires_at).isoformat(),
         }
     else:
@@ -458,7 +475,7 @@ def valid_operational_outcome(row, parent):
         import json
         contract = json.loads(parent["parameters_json"])["operational_contract"]
         validate_operational_contract(contract)
-        if (row["target_version"] != TARGET_VERSION
+        if (row["target_version"] != contract["version"]
                 or row["contract_sha256"] != contract["contract_sha256"]):
             return False
         result_fields = ("outcome", "exit_price", "exit_at", "exit_source",

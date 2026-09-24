@@ -32,6 +32,27 @@ def test_temperature_fits_early_oof_and_improves_later_oof():
     assert result["validation_source"] == "LATER_OUTER_OOF_ONLY"
     assert result["validation_metrics"]["calibrated"]["brier"] < result["validation_metrics"]["raw"]["brier"]
     assert result["validation_metrics"]["calibrated"]["log_loss"] < result["validation_metrics"]["baseline"]["log_loss"]
+    for source in ("raw", "calibrated", "baseline"):
+        for name in ("brier", "log_loss"):
+            metric = result["validation_metrics"][source][name]
+            ci = result["validation_metrics"][source]["confidence_intervals"][name]
+            assert ci["lower"] <= metric <= ci["upper"]
+
+
+def test_validation_with_only_tp_first_cannot_approve_calibration():
+    fit, y_fit, _ = _evidence(150)
+    validation = np.repeat([[0.80, 0.10, 0.10]], 90, axis=0)
+    labels = np.zeros(90, dtype=int)
+    baseline = np.repeat([[1 / 3] * 3], 90, axis=0)
+    result = select_and_validate_temperature(
+        fit, y_fit, validation, labels, baseline,
+    )
+    assert result["approved"] is False
+    assert result["status"] == "INSUFFICIENT_OOF_CLASS_SUPPORT"
+    assert result["validation_class_counts"] == {
+        "TP_FIRST": 90, "SL_FIRST": 0, "TIMEOUT": 0,
+    }
+    assert result["validation_metrics"] is None
 
 
 def test_later_labels_do_not_select_temperature():

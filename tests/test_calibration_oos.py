@@ -14,6 +14,7 @@ from portfolio_tracker.analytics.multi_timeframe import HorizonProjection
 from portfolio_tracker.services.scenario_calibration import (
     make_scenario_contract, apply_scenario_calibration, outcome_class,
 )
+from portfolio_tracker.services.model_observations import maturity
 from tests.test_live_model_integrity import repo, bars, AT
 
 
@@ -134,7 +135,7 @@ def add_observation(repo, at, contract):
         raw_probability_up=Decimal('.7'),horizon_minutes=60,
         parameters_json=json.dumps({'scenario_contract':contract}),
     )
-    due = at+timedelta(hours=1)
+    due = maturity(at, 60).to_pydatetime()
     repo.resolve_live_model_observations(symbol='SMCI',current_as_of=due+timedelta(minutes=1),
                                          historical_bars=bars((due,101)))
 
@@ -156,7 +157,7 @@ def test_repository_model_isolation_frozen_labels_and_asof(repo):
     assert [r.observed_at for r in rows] == [AT,later]
     assert [r.outcome for r in rows] == [1,0]
     early = repo.live_scenario_calibration_samples('SMCI',horizon_minutes=60,model_id=contract['model_id'],as_of=AT+timedelta(hours=1))
-    assert early == ()  # maturity passed but resolution was not known yet
+    assert early == ()  # Neither the target nor its signed result was available yet.
     assert repo.live_scenario_calibration_samples('SMCI',horizon_minutes=360,model_id=contract['model_id'],as_of=cutoff) == ()
     assert repo.cash_balance_usd() == Decimal('921.05')
     assert repo.verify_live_model_observations() == (3,())
@@ -169,7 +170,7 @@ def test_repository_uses_one_scenario_sample_per_ny_session(repo):
     add_observation(repo, AT + timedelta(minutes=5), contract)
     samples = repo.live_scenario_calibration_samples(
         'SMCI', horizon_minutes=60, model_id=contract['model_id'],
-        as_of=AT + timedelta(days=1),
+        as_of=maturity(AT + timedelta(minutes=5), 60).to_pydatetime() + timedelta(minutes=1),
     )
     assert len(samples) == 1
     assert samples[0].observed_at == AT

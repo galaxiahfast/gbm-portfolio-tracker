@@ -237,6 +237,9 @@ class ProbabilityAnalysis:
     buy_levels: ExecutionLevels | None = None
     sell_levels: ExecutionLevels | None = None
     cross_asset_context: dict = field(default_factory=dict)
+    # Pre-fundamental technical view for the operational model. The public
+    # analysis may still show news-adjusted scores and enforce event vetoes.
+    model_technical_analysis: ProbabilityAnalysis | None = field(default=None, repr=False, compare=False)
 
     @property
     def source_bar_closed_at(self) -> datetime:

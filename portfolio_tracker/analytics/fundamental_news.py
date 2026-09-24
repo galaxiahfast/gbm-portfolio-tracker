@@ -770,6 +770,7 @@ def apply_fundamental_filter(
             f"peso {item.recency_weight:.3f} | sentimiento {item.sentiment:+.2f} | {item.title}"
             for item in snapshot.news
         ),
+        model_technical_analysis=analysis.model_technical_analysis or analysis,
     )
     validate_probability_analysis(adjusted)
     return adjusted

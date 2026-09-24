@@ -1,8 +1,7 @@
-"""Conservative, cost-aware ranking of calibrated first-passage opportunities.
+"""Cost-aware first-passage ranking with development-only observed gap losses.
 
-TIMEOUT is valued at the stop exit as a stress assumption, not as a claim
-about its realized price. Gap losses can exceed this estimate. The module is
-pure and never submits an order or reads the portfolio ledger.
+Fill probability, spread and slippage are explicit assumptions, not measured
+fills. The module is pure and never submits an order or reads the ledger.
 """
 from __future__ import annotations
 
@@ -28,6 +27,19 @@ class TradingCostPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class FillModel:
+    no_fill_probability: float = 0.05
+    spread_bps: float = 4.0  # full quoted spread; pay half at entry and exit
+
+    def __post_init__(self):
+        if (not math.isfinite(float(self.no_fill_probability))
+                or not 0 <= self.no_fill_probability < 1
+                or not math.isfinite(float(self.spread_bps))
+                or self.spread_bps < 0):
+            raise ValueError("Supuestos de fill/spread inválidos.")
+
+
+@dataclass(frozen=True, slots=True)
 class NetOpportunity:
     horizon: str
     entry: float
@@ -38,6 +50,14 @@ class NetOpportunity:
     timeout: float
     net_tp_per_share: float
     net_sl_per_share: float
+    worst_sl_per_share: float
+    theoretical_net_ev_per_share: float
+    theoretical_net_ev_total: float
+    observed_net_ev_per_share: float
+    observed_net_ev_total: float
+    fill_probability: float
+    observed_sl_samples: int
+    spread_bps: float
     net_ev_per_share: float
     net_ev_total: float
     net_reward_risk: float
@@ -75,12 +95,14 @@ def evaluate_long_opportunity(
     maximum_concentration: float = 0.30,
     minimum_net_reward_risk: float = 1.5,
     costs: TradingCostPolicy | None = None,
+    observed_sl_loss_multiples: tuple[float, ...] | None = None,
+    fills: FillModel | None = None,
 ) -> NetOpportunity:
-    """Evaluate a LONG with first-hit probabilities and two-sided costs.
+    """Evaluate a LONG with empirical stop exits and explicit fill assumptions.
 
-    Position size is capped by *net* stop loss, entry cash including costs,
-    and portfolio concentration. A timeout is stress-priced at the stop; it
-    must not be silently treated as a profitable or cost-free outcome.
+    Missing observed SL exits makes the opportunity non-actionable. Position
+    size uses the worst observed stop fill; TIMEOUT is stressed at that same
+    adverse exit. This is conservative but not a guarantee against a new gap.
     """
     entry = _finite_positive(entry, "Entrada")
     stop = _finite_positive(stop, "Stop")
@@ -100,23 +122,55 @@ def evaluate_long_opportunity(
             or minimum_net_reward_risk < 1):
         raise ValueError("Parámetros de capital o riesgo inválidos.")
     costs = costs or TradingCostPolicy()
+    fills = fills or FillModel()
     rate = costs.rate_per_side
     entry_cost = entry * rate
-    net_tp = (take_profit - entry) - entry_cost - take_profit * rate
-    net_sl = (stop - entry) - entry_cost - stop * rate
-    if net_sl >= 0:
+    theoretical_tp = (take_profit - entry) - entry_cost - take_profit * rate
+    theoretical_sl = (stop - entry) - entry_cost - stop * rate
+    if theoretical_sl >= 0:
         raise ValueError("El stop debe representar una pérdida neta.")
-    # Conservative timeout stress: exit at the stop, including both sides.
-    net_ev = probabilities[0] * net_tp + (probabilities[1] + probabilities[2]) * net_sl
+    theoretical_ev = (
+        probabilities[0] * theoretical_tp
+        + (probabilities[1] + probabilities[2]) * theoretical_sl
+    )
+    observed = tuple(float(value) for value in (observed_sl_loss_multiples or ()))
+    if any(not math.isfinite(value) or value < 1.0 - 1e-9 for value in observed):
+        raise ValueError("Las pérdidas observadas SL deben ser múltiplos finitos >= 1 del stop.")
+    half_spread = fills.spread_bps / 20_000.0
+    paid_entry = entry * (1 + half_spread)
+    paid_tp = take_profit * (1 - half_spread)
+    net_tp = paid_tp - paid_entry - rate * (paid_entry + paid_tp)
+    realized_stops = tuple(
+        entry - (entry - stop) * multiple for multiple in observed
+    )
+    if any(exit_price <= 0 for exit_price in realized_stops):
+        raise ValueError("Pérdida observada excede el precio disponible.")
+    net_sl_distribution = tuple(
+        exit_price * (1 - half_spread) - paid_entry
+        - rate * (paid_entry + exit_price * (1 - half_spread))
+        for exit_price in realized_stops
+    )
+    # No empirical SL exits -> display the theoretical column, but never
+    # fabricate an 'observed' EV or authorize a trade.
+    net_sl = sum(net_sl_distribution) / len(net_sl_distribution) if observed else theoretical_sl
+    worst_sl = min(net_sl_distribution) if observed else theoretical_sl
+    conditional_ev = (
+        probabilities[0] * net_tp
+        + probabilities[1] * net_sl
+        + probabilities[2] * worst_sl
+    ) if observed else 0.0
+    net_ev = (1 - fills.no_fill_probability) * conditional_ev
     net_rr = net_tp / -net_sl
     budget = capital * float(risk_fraction)
     headroom = max(0.0, float(maximum_concentration) * capital - current_market_value)
     shares = max(0, min(
-        math.floor(budget / -net_sl),
-        math.floor(cash / (entry + entry_cost)),
+        math.floor(budget / -worst_sl),
+        math.floor(cash / (paid_entry * (1 + rate))),
         math.floor(headroom / entry),
     ))
     reasons = []
+    if not observed:
+        reasons.append("sin distribución observada de pérdidas SL_FIRST")
     if net_tp <= 0 or net_rr + 1e-12 < minimum_net_reward_risk:
         reasons.append("R:R neto insuficiente")
     if net_ev <= 0:
@@ -127,9 +181,16 @@ def evaluate_long_opportunity(
         horizon=str(horizon), entry=entry, stop=stop, take_profit=take_profit,
         tp_first=probabilities[0], sl_first=probabilities[1], timeout=probabilities[2],
         net_tp_per_share=net_tp, net_sl_per_share=net_sl,
+        worst_sl_per_share=worst_sl,
+        theoretical_net_ev_per_share=theoretical_ev,
+        theoretical_net_ev_total=theoretical_ev * shares,
+        observed_net_ev_per_share=net_ev,
+        observed_net_ev_total=net_ev * shares,
+        fill_probability=1 - fills.no_fill_probability,
+        observed_sl_samples=len(observed), spread_bps=fills.spread_bps,
         net_ev_per_share=net_ev, net_ev_total=net_ev * shares,
         net_reward_risk=net_rr, shares=shares,
-        monetary_risk=shares * -net_sl, risk_budget=budget,
+        monetary_risk=shares * -worst_sl, risk_budget=budget,
         cost_rate_per_side=rate, eligible=not reasons,
         reason="Apta" if not reasons else "; ".join(reasons),
     )

@@ -20,13 +20,20 @@ import pandas as pd
 
 from .closed_bars import NY, _calendar
 from .historical_replay import validate_historical_replay
+from .operational_target import TARGET_VERSION
 from .operational_calibration import (
     DEFAULT_TEMPERATURE_GRID,
     select_and_validate_temperature,
     temperature_scale,
 )
+from .holdout_registry import (
+    DEFAULT_HOLDOUT_REGISTRY, reserve_holdout_opening, verify_holdout_opening,
+)
+from .metric_uncertainty import proportion_interval, score_intervals
 from .horizon_models import (
     FEATURE_NAMES,
+    FeatureContractMismatch,
+    MODEL_FEATURE_VERSION,
     HORIZON_MODEL_CONTRACT,
     PROFESSIONAL_MINIMUM_SAMPLES,
     TARGET_CLASSES,
@@ -43,12 +50,15 @@ from .horizon_models import (
     _softmax,
     _transform,
     horizon_samples,
+    replay_population_report,
 )
 from ..services.directional_collection import HORIZON_MINUTES
 from ..services.model_observations import SESSION_HORIZONS, canonical
 
 
-NESTED_WALK_FORWARD_CONTRACT = "NESTED_EMBARGOED_WALK_FORWARD_V2"
+NESTED_WALK_FORWARD_CONTRACT = "NESTED_EMBARGOED_WALK_FORWARD_V4"
+PREVIOUS_NESTED_WALK_FORWARD_CONTRACT = "NESTED_EMBARGOED_WALK_FORWARD_V3"
+OLDER_NESTED_WALK_FORWARD_CONTRACT = "NESTED_EMBARGOED_WALK_FORWARD_V2"
 LEGACY_NESTED_WALK_FORWARD_CONTRACT = "NESTED_EMBARGOED_WALK_FORWARD_V1"
 EMBARGO_SESSIONS = {
     "1 Hora": 1,
@@ -119,6 +129,52 @@ class WalkForwardConfig:
             raise ValueError("Configuración de optimización inválida.")
 
 
+def minimum_samples_for_horizon(horizon_label: str, config: WalkForwardConfig) -> int:
+    """Conservative one-cut-per-session floor after all three embargo layers.
+
+    The first outer training block must survive its own embargo and leave an
+    inner training block after another embargo. At least ``outer_folds`` test
+    blocks and chronological OOF calibration fit/validation must remain. We
+    then add the final holdout embargo and solve n - holdout(n) - embargo >=
+    required development. Actual XNYS cuts are still purged and checked below.
+    """
+    embargo = EMBARGO_SESSIONS[horizon_label]
+    inner_training_capacity = max(
+        config.minimum_inner_training + config.inner_folds * config.minimum_inner_validation,
+        2 * (config.minimum_inner_training + embargo),
+    )
+    outer_initial = embargo + max(config.minimum_outer_training, inner_training_capacity)
+    oof_required = max(
+        math.ceil((config.minimum_calibration_fit + embargo) / 0.60),
+        math.ceil(config.minimum_calibration_validation / 0.40),
+    )
+    development_required = 2 * max(
+        outer_initial,
+        config.outer_folds * config.minimum_outer_test,
+        oof_required,
+    )
+    n = max(config.minimum_samples, config.minimum_final_holdout + 1)
+    while n - max(config.minimum_final_holdout, math.ceil(n * config.final_holdout_fraction)) - embargo < development_required:
+        n += 1
+    return n
+
+
+def _development_stop_evidence(samples: Sequence[HorizonSample]) -> dict:
+    """Observed stop losses from development only, never the final holdout."""
+    stop_rows = [row for row in samples if row.outcome == "SL_FIRST" and row.entry_side == "LONG"]
+    multiples = [float(row.sl_loss_multiple) for row in stop_rows
+                 if row.sl_loss_multiple is not None and math.isfinite(row.sl_loss_multiple)
+                 and row.sl_loss_multiple > 0]
+    return {
+        "source": "ELIGIBLE_LONG_DEVELOPMENT_ONLY",
+        "target": TARGET_VERSION,
+        "observed_sl_samples": len(multiples),
+        "gap_samples": sum("gap-open" in (row.sl_exit_source or "") for row in stop_rows),
+        "gross_loss_multiples": sorted(multiples),
+        "semantics": "OBSERVED_EXIT_VS_FROZEN_STOP_DISTANCE_BEFORE_FILL_COSTS",
+    }
+
+
 def _sample_manifest(sample: HorizonSample) -> dict:
     return {
         "cut_id": sample.cut_id,
@@ -128,6 +184,14 @@ def _sample_manifest(sample: HorizonSample) -> dict:
             canonical(_clean_numbers(sample.features)).encode("utf-8")
         ).hexdigest(),
         "outcome": sample.outcome,
+        "eligible_at_emission": sample.eligible_at_emission,
+        "target_version": sample.target_version,
+        "net_pnl_per_share": sample.net_pnl_per_share,
+        "feature_version": sample.feature_version,
+        "available_features": list(sample.available_features),
+        "sl_loss_multiple": sample.sl_loss_multiple,
+        "sl_exit_source": sample.sl_exit_source,
+        "entry_side": sample.entry_side,
     }
 
 
@@ -227,10 +291,14 @@ def _candidate_metrics(
             probabilities = _softmax(
                 np.column_stack([np.ones(len(x_validation)), x_validation]) @ weights
             )
+            intervals = score_intervals(probabilities, y_validation)
             row = {
                 "l2": l2,
                 "log_loss": _log_loss(probabilities, y_validation),
                 "brier": _brier(probabilities, y_validation),
+                "confidence_intervals": {
+                    name: intervals[name] for name in ("brier", "log_loss")
+                },
                 "samples": len(validation),
             }
             aggregates[l2].append(row)
@@ -273,6 +341,8 @@ def _evaluate_fold(training, test, selected_l2, config, *, return_predictions=Fa
         dtype=float,
     )
     baseline = np.repeat(priors.reshape(1, -1), len(test), axis=0)
+    prediction_intervals = score_intervals(probabilities, y_test)
+    baseline_intervals = score_intervals(baseline, y_test)
     metrics = {
         "samples": len(test),
         "brier": _brier(probabilities, y_test),
@@ -280,6 +350,11 @@ def _evaluate_fold(training, test, selected_l2, config, *, return_predictions=Fa
         "log_loss": _log_loss(probabilities, y_test),
         "baseline_log_loss": _log_loss(baseline, y_test),
         "accuracy": _accuracy(probabilities, y_test),
+        "confidence_intervals": {
+            **prediction_intervals,
+            "baseline_brier": baseline_intervals["brier"],
+            "baseline_log_loss": baseline_intervals["log_loss"],
+        },
     }
     if return_predictions:
         observations = tuple(
@@ -290,7 +365,7 @@ def _evaluate_fold(training, test, selected_l2, config, *, return_predictions=Fa
     return metrics
 
 
-def _aggregate_outer(folds):
+def _aggregate_outer(folds, observations):
     total = sum(row["metrics"]["samples"] for row in folds)
     names = ("brier", "baseline_brier", "log_loss", "baseline_log_loss", "accuracy")
     metrics = {
@@ -302,8 +377,19 @@ def _aggregate_outer(folds):
         and row["metrics"]["log_loss"] < row["metrics"]["baseline_log_loss"]
         for row in folds
     )
+    y = _labels([item[0] for item in observations])
+    predictions = np.asarray([item[1] for item in observations])
+    baselines = np.asarray([item[2] for item in observations])
+    prediction_intervals = score_intervals(predictions, y)
+    baseline_intervals = score_intervals(baselines, y)
     return {
         **metrics,
+        "confidence_intervals": {
+            **prediction_intervals,
+            "baseline_brier": baseline_intervals["brier"],
+            "baseline_log_loss": baseline_intervals["log_loss"],
+            "skillful_fold_ratio": proportion_interval(skillful, len(folds)),
+        },
         "samples": total,
         "skillful_folds": skillful,
         "folds": len(folds),
@@ -385,7 +471,7 @@ def _rejected(
         "horizon": horizon_label,
         "horizon_minutes": HORIZON_MINUTES[horizon_label],
         "base_model_contract": HORIZON_MODEL_CONTRACT,
-        "target": "TP_FIRST_SL_FIRST_TIMEOUT_V1",
+        "target": TARGET_VERSION,
         "classes": list(TARGET_CLASSES),
         "status": status,
         "promotable": False,
@@ -408,7 +494,7 @@ def _rejected(
         "model": None,
         "score_semantics": "NO_SCORE_MODEL_NOT_APPROVED",
         "feature_schema_sha256": _sha(list(FEATURE_NAMES)),
-        "minimum_samples_required": config.minimum_samples,
+        "minimum_samples_required": minimum_samples_for_horizon(horizon_label, config),
     }
     payload = _clean_numbers(payload)
     payload["result_sha256"] = _sha(payload)
@@ -419,6 +505,10 @@ def nested_walk_forward_horizon(
     horizon_label: str,
     samples: Sequence[HorizonSample],
     config: WalkForwardConfig | None = None,
+    *,
+    symbol: str = "UNSPECIFIED",
+    dataset_sha256: str | None = None,
+    registry_path: str | Path = DEFAULT_HOLDOUT_REGISTRY,
 ):
     """Validate one horizon and open its final holdout only after protocol freeze."""
 
@@ -427,9 +517,21 @@ def nested_walk_forward_horizon(
     if horizon_label not in HORIZON_MINUTES:
         raise ValueError(f"Horizonte desconocido: {horizon_label}.")
     embargo_sessions = EMBARGO_SESSIONS[horizon_label]
-    samples = tuple(sorted(samples, key=lambda row: row.observed_at))
+    # Eligibility is frozen at emission. Never validate a hypothetical barrier
+    # as though an entry could actually have been placed.
+    samples = tuple(sorted(
+        (row for row in samples if row.eligible_at_emission and row.target_version == TARGET_VERSION),
+        key=lambda row: row.observed_at,
+    ))
     if any(len(row.features) != len(FEATURE_NAMES) for row in samples):
         raise ValueError("Longitud de features incompatible con el contrato.")
+    if samples and (any(row.feature_version != MODEL_FEATURE_VERSION for row in samples)
+                    or any(row.available_features != tuple(FEATURE_NAMES) for row in samples)
+                    or any(row.available_features != tuple(
+                        name for name, value in zip(FEATURE_NAMES, row.features)
+                        if math.isfinite(value)
+                    ) for row in samples)):
+        raise FeatureContractMismatch("Features train/replay incompatibles: versión o cobertura histórica incompleta.")
     if any(row.outcome not in TARGET_CLASSES for row in samples):
         raise ValueError("Clase operacional desconocida.")
     holdout_size = max(
@@ -443,11 +545,13 @@ def nested_walk_forward_horizon(
         holdout = samples[-holdout_size:]
         development_raw = samples[:-holdout_size]
     holdout_commitment = _sha([_sample_manifest(row) for row in holdout])
-    if len(samples) < config.minimum_samples:
+    required_samples = minimum_samples_for_horizon(horizon_label, config)
+    if len(samples) < required_samples:
         return _rejected(
             horizon_label, samples, config, embargo_sessions, holdout,
             holdout_commitment, "INSUFFICIENT_DATA_FINAL_HOLDOUT_UNOPENED",
-            f"{len(samples)}/{config.minimum_samples} observaciones resueltas.",
+            f"{len(samples)}/{required_samples} observaciones elegibles; "
+            f"embargo de {embargo_sessions} sesiones y desarrollo anidado protegidos.",
         )
     if len(holdout) < config.minimum_final_holdout or not development_raw:
         return _rejected(
@@ -512,7 +616,7 @@ def nested_walk_forward_horizon(
             "inner_folds": inner_folds,
             "metrics": fold_metrics,
         })
-    aggregate = _aggregate_outer(outer_results)
+    aggregate = _aggregate_outer(outer_results, outer_oof)
     walk_forward = {
         "policy": "EXPANDING_NESTED_WALK_FORWARD_XNYS_EMBARGO_V1",
         "outer_folds": outer_results,
@@ -560,22 +664,46 @@ def nested_walk_forward_horizon(
             calibration=calibration,
             development_exclusions=final_exclusions,
         )
+    stop_evidence = _development_stop_evidence(development)
+    if stop_evidence["observed_sl_samples"] < config.minimum_class_samples:
+        return _rejected(
+            horizon_label, samples, config, embargo_sessions, holdout,
+            holdout_commitment, "INSUFFICIENT_OBSERVED_STOP_EVIDENCE",
+            "No hay pérdidas SL_FIRST observadas suficientes para estimar gaps.",
+            walk_forward=walk_forward, calibration=calibration,
+            development_exclusions=final_exclusions,
+        )
     frozen_protocol = _clean_numbers({
         "contract": NESTED_WALK_FORWARD_CONTRACT,
         "horizon": horizon_label,
         "horizon_minutes": HORIZON_MINUTES[horizon_label],
         "embargo_sessions": embargo_sessions,
-        "target": "TP_FIRST_SL_FIRST_TIMEOUT_V1",
+        "target": TARGET_VERSION,
         "feature_schema_sha256": _sha(list(FEATURE_NAMES)),
         "selected_l2": final_l2,
         "walk_forward": walk_forward,
         "final_inner_folds": final_inner_folds,
         "calibration": calibration,
+        "execution_evidence": stop_evidence,
         "holdout_commitment_sha256": holdout_commitment,
     })
     protocol_sha = _sha(frozen_protocol)
 
-    # HOLDOUT IS OPENED ONLY BELOW THIS LINE, after protocol_sha is immutable.
+    # Persistent reservation precedes all holdout-label access. A duplicate
+    # dataset or overlapping cut raises, even across processes and restarts.
+    dataset_fingerprint = dataset_sha256 or _sha([
+        _sample_manifest(row) for row in samples
+    ])
+    opening = reserve_holdout_opening(
+        registry_path=registry_path,
+        dataset_sha256=dataset_fingerprint,
+        symbol=symbol.upper(),
+        horizon=horizon_label,
+        protocol_sha256=protocol_sha,
+        commitment_sha256=holdout_commitment,
+        members=tuple((row.cut_id, row.observed_at) for row in holdout),
+    )
+    # HOLDOUT IS OPENED ONLY BELOW THIS LINE, after durable registration.
     medians, means, scales = _fit_preprocessor(development)
     x_development = _transform(development, medians, means, scales)
     x_holdout = _transform(holdout, medians, means, scales)
@@ -591,6 +719,9 @@ def nested_walk_forward_horizon(
         dtype=float,
     )
     baseline = np.repeat(priors.reshape(1, -1), len(holdout), axis=0)
+    calibrated_intervals = score_intervals(probabilities, y_holdout)
+    raw_intervals = score_intervals(raw_probabilities, y_holdout)
+    baseline_intervals = score_intervals(baseline, y_holdout)
     final_metrics = {
         "source": "SEALED_FINAL_HOLDOUT_ONLY",
         "samples": len(holdout),
@@ -602,16 +733,31 @@ def nested_walk_forward_horizon(
         "raw_brier": _brier(raw_probabilities, y_holdout),
         "raw_log_loss": _log_loss(raw_probabilities, y_holdout),
         "accuracy": _accuracy(probabilities, y_holdout),
+        "confidence_intervals": {
+            **calibrated_intervals,
+            "baseline_brier": baseline_intervals["brier"],
+            "baseline_log_loss": baseline_intervals["log_loss"],
+            "raw_brier": raw_intervals["brier"],
+            "raw_log_loss": raw_intervals["log_loss"],
+        },
         "opened_against_protocol_sha256": protocol_sha,
     }
+    final_class_support = min(final_metrics["class_counts"].values()) >= config.minimum_calibration_per_class
     final_skill = (
-        final_metrics["brier"] < final_metrics["baseline_brier"]
+        final_class_support
+        and final_metrics["brier"] < final_metrics["baseline_brier"]
         and final_metrics["log_loss"] < final_metrics["baseline_log_loss"]
         and final_metrics["brier"] < final_metrics["raw_brier"]
         and final_metrics["log_loss"] < final_metrics["raw_log_loss"]
     )
-    status = "APPROVED_SEALED_HOLDOUT_CALIBRATED" if final_skill else "REJECTED_CALIBRATED_FINAL_HOLDOUT"
+    status = (
+        "REJECTED_FINAL_HOLDOUT_CLASS_SUPPORT" if not final_class_support else
+        "APPROVED_SEALED_HOLDOUT_CALIBRATED" if final_skill else
+        "REJECTED_CALIBRATED_FINAL_HOLDOUT"
+    )
     reason = (
+        "Holdout sin representación mínima de TP_FIRST, SL_FIRST y TIMEOUT."
+        if not final_class_support else
         "Walk-forward, calibración OOF y holdout final superan los controles preregistrados."
         if final_skill else
         "La calibración no mejoró al score original y al baseline en holdout final."
@@ -620,7 +766,7 @@ def nested_walk_forward_horizon(
         "horizon": horizon_label,
         "horizon_minutes": HORIZON_MINUTES[horizon_label],
         "base_model_contract": HORIZON_MODEL_CONTRACT,
-        "target": "TP_FIRST_SL_FIRST_TIMEOUT_V1",
+        "target": TARGET_VERSION,
         "classes": list(TARGET_CLASSES),
         "status": status,
         "promotable": bool(final_skill),
@@ -632,12 +778,14 @@ def nested_walk_forward_horizon(
         "development_exclusions": final_exclusions,
         "walk_forward": walk_forward,
         "calibration": calibration,
+        "execution_evidence": stop_evidence,
         "frozen_protocol": frozen_protocol,
         "protocol_frozen_sha256": protocol_sha,
         "final_holdout": {
             "status": "OPENED_ONCE_AFTER_PROTOCOL_FREEZE",
             "samples": len(holdout),
             "commitment_sha256": holdout_commitment,
+            "opening": opening,
             "metrics": final_metrics,
         },
         "model": {
@@ -659,22 +807,46 @@ def nested_walk_forward_horizon(
             "HISTORICAL_OOS_CALIBRATED_PRELIMINARY" if final_skill else "NO_SCORE_MODEL_NOT_APPROVED"
         ),
         "feature_names": list(FEATURE_NAMES),
+        "feature_version": MODEL_FEATURE_VERSION,
+        "available_features": list(samples[0].available_features),
         "feature_schema_sha256": _sha(list(FEATURE_NAMES)),
-        "minimum_samples_required": config.minimum_samples,
+        "minimum_samples_required": required_samples,
     }
     payload = _clean_numbers(payload)
     payload["result_sha256"] = _sha(payload)
     return payload
 
 
-def run_nested_walk_forward_replay(replay: Mapping, config: WalkForwardConfig | None = None):
+def run_nested_walk_forward_replay(
+    replay: Mapping, config: WalkForwardConfig | None = None,
+    *, registry_path: str | Path = DEFAULT_HOLDOUT_REGISTRY,
+):
     validate_historical_replay(dict(replay))
     config = config or WalkForwardConfig()
     config.validate()
-    results = [
-        nested_walk_forward_horizon(label, horizon_samples(replay, label), config)
-        for label in HORIZON_MINUTES
-    ]
+    results = []
+    for label in HORIZON_MINUTES:
+        population = replay_population_report(replay, label)
+        result = nested_walk_forward_horizon(
+            label, horizon_samples(replay, label), config,
+            symbol=str(replay.get("symbol") or "UNSPECIFIED"),
+            dataset_sha256=str(replay["dataset_sha256"]),
+            registry_path=registry_path,
+        )
+        result["population"] = population
+        required = minimum_samples_for_horizon(label, config)
+        if population["trainable_current_target_n"] < required:
+            result["status"] = "EVIDENCIA_INSUFICIENTE"
+            result["reason"] = (
+                "Sin evidencia de entradas ejecutables suficiente: "
+                f"{population['trainable_current_target_n']}/{required} "
+                "muestras elegibles del contrato vigente. Holdout final sellado."
+            )
+            result["promotable"] = False
+        result["result_sha256"] = _sha({
+            key: value for key, value in result.items() if key != "result_sha256"
+        })
+        results.append(result)
     deterministic = {
         "contract": NESTED_WALK_FORWARD_CONTRACT,
         "validator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -702,7 +874,10 @@ def run_nested_walk_forward_replay(replay: Mapping, config: WalkForwardConfig | 
 def validate_nested_walk_forward_artifact(payload: Mapping) -> bool:
     if (not isinstance(payload, Mapping)
             or payload.get("contract") not in (
-                NESTED_WALK_FORWARD_CONTRACT, LEGACY_NESTED_WALK_FORWARD_CONTRACT
+                NESTED_WALK_FORWARD_CONTRACT,
+                PREVIOUS_NESTED_WALK_FORWARD_CONTRACT,
+                OLDER_NESTED_WALK_FORWARD_CONTRACT,
+                LEGACY_NESTED_WALK_FORWARD_CONTRACT,
             )):
         raise ValueError("Contrato walk-forward desconocido.")
     results = payload.get("results")
@@ -718,7 +893,10 @@ def validate_nested_walk_forward_artifact(payload: Mapping) -> bool:
         metrics = final.get("metrics")
         if metrics is not None and metrics.get("opened_against_protocol_sha256") != row.get("protocol_frozen_sha256"):
             raise ValueError("El holdout fue abierto contra otro protocolo.")
-        if payload["contract"] == NESTED_WALK_FORWARD_CONTRACT:
+        if payload["contract"] in (
+            NESTED_WALK_FORWARD_CONTRACT, PREVIOUS_NESTED_WALK_FORWARD_CONTRACT,
+            OLDER_NESTED_WALK_FORWARD_CONTRACT,
+        ):
             calibration = row.get("calibration")
             if row.get("promotable"):
                 if (row.get("status") != "APPROVED_SEALED_HOLDOUT_CALIBRATED"
@@ -736,6 +914,49 @@ def validate_nested_walk_forward_artifact(payload: Mapping) -> bool:
                         or frozen.get("calibration") != calibration
                         or frozen.get("holdout_commitment_sha256") != final.get("commitment_sha256")):
                     raise ValueError("Protocolo de calibración/holdout no coincide.")
+                if payload["contract"] == NESTED_WALK_FORWARD_CONTRACT:
+                    stop_evidence = row.get("execution_evidence") or {}
+                    multiples = stop_evidence.get("gross_loss_multiples") or []
+                    if (frozen.get("execution_evidence") != stop_evidence
+                            or stop_evidence.get("source") != "ELIGIBLE_LONG_DEVELOPMENT_ONLY"
+                            or stop_evidence.get("observed_sl_samples") != len(multiples)
+                            or (row.get("promotable") and len(multiples) < int(
+                                (payload.get("configuration") or {}).get("minimum_class_samples", 20)
+                            ))):
+                        raise ValueError("Distribución observada de stops ausente o no congelada.")
+                    opening = final.get("opening") or {}
+                    if (not opening.get("opening_id") or not opening.get("opened_at_utc")
+                            or not opening.get("dataset_sha256")
+                            or opening.get("member_count") != final.get("samples")):
+                        raise ValueError("Holdout abierto sin registro duradero verificable.")
+                    if not verify_holdout_opening(
+                        opening, symbol=payload.get("symbol", "UNSPECIFIED"),
+                        horizon=row["horizon"],
+                        protocol_sha256=row["protocol_frozen_sha256"],
+                        commitment_sha256=final["commitment_sha256"],
+                    ):
+                        raise ValueError("Apertura de holdout ausente del registro local.")
+                    intervals = (metrics or {}).get("confidence_intervals") or {}
+                    for name in (
+                        "brier", "baseline_brier", "log_loss", "baseline_log_loss",
+                        "raw_brier", "raw_log_loss", "accuracy",
+                    ):
+                        bounds = intervals.get(name) or {}
+                        if (not isinstance(bounds.get("lower"), (int, float))
+                                or not isinstance(bounds.get("upper"), (int, float))
+                                or bounds["lower"] > metrics[name]
+                                or bounds["upper"] < metrics[name]):
+                            raise ValueError(f"Métrica {name} sin intervalo válido.")
+                    if row.get("promotable") and min(
+                        (metrics.get("class_counts") or {}).values(), default=0
+                    ) < int((payload.get("configuration") or {}).get("minimum_calibration_per_class", 5)):
+                        raise ValueError("Modelo promovido sin soporte de todas las clases finales.")
+                    if row.get("promotable"):
+                        threshold = int((payload.get("configuration") or {}).get("minimum_calibration_per_class", 5))
+                        for part in ("fit_class_counts", "validation_class_counts"):
+                            counts = (calibration or {}).get(part) or {}
+                            if min((counts.get(name, 0) for name in TARGET_CLASSES), default=0) < threshold:
+                                raise ValueError(f"Calibración aprobada sin soporte de clase: {part}.")
             if (calibration is not None and calibration.get("approved")
                     and not row.get("walk_forward", {}).get("aggregate")):
                 raise ValueError("Calibración sin evidencia walk-forward.")

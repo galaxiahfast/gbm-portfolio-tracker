@@ -518,18 +518,25 @@ class PortfolioRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def latest_backtest_run(self) -> dict[str, Any] | None:
-        """Devuelve el último resultado completo para el reporte maestro local."""
+    def latest_backtest_run(self, *, symbol: str | None = None) -> dict[str, Any] | None:
+        """Latest run containing the requested asset; never borrow another asset's run."""
 
+        asset_filter = (
+            "WHERE EXISTS (SELECT 1 FROM json_each("
+            "CASE WHEN json_valid(symbols_json) THEN symbols_json ELSE '[]' END) "
+            "WHERE UPPER(value)=?)" if symbol is not None else ""
+        )
         with self.database.connect() as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT id, engine_version, symbols_json, parameters_json,
                        dataset_sha256, payload_json, payload_sha256,
                        status, created_at
                 FROM backtest_runs
+                {asset_filter}
                 ORDER BY created_at DESC, id DESC LIMIT 1
-                """
+                """,
+                ((symbol.strip().upper(),) if symbol is not None else ()),
             ).fetchone()
         return dict(row) if row else None
 
@@ -687,7 +694,7 @@ class PortfolioRepository:
     ) -> dict[str, Any]:
         from .services.model_observations import (
             VERSION, POLICY, maturity, utc_timestamp, is_regular_close,
-            forecast_digest, canonical,
+            forecast_digest, canonical, ANCHOR_VERSION,
         )
         observed = utc_timestamp(observed_at)
         source = utc_timestamp(source_bar_at)
@@ -710,7 +717,8 @@ class PortfolioRepository:
             reference_price=str(reference_price), raw_probability_up=str(raw_probability_up),
             predicted_direction="UP" if raw_probability_up >= Decimal("0.5") else "DOWN",
             parameters_json=canonical(parameters), integrity_version=VERSION,
-            horizon_policy=POLICY, created_at=_utc_now().isoformat(),
+            horizon_policy=POLICY, anchor_version=ANCHOR_VERSION,
+            created_at=_utc_now().isoformat(),
         )
         row["observation_sha256"] = forecast_digest(row)
         row["resolution_status"] = "PENDING"
@@ -741,7 +749,9 @@ class PortfolioRepository:
         ) for item in forecasts]
         metadata = [json.loads(row["parameters_json"]) for row in rows]
         if any(item.get("collection_protocol") != protocol
-               or item.get("session_date") != session_date for item in metadata):
+               or item.get("session_date") != session_date
+               or item.get("anchor_version") != row["anchor_version"]
+               for row, item in zip(rows, metadata)):
             raise ValueError("El protocolo y la sesión del lote no coinciden.")
         replay = metadata[0].get("replay")
         if (not isinstance(replay, dict)
@@ -758,6 +768,8 @@ class PortfolioRepository:
                     or operational["model"]["horizon_minutes"] != row["horizon_minutes"]
                     or operational["observed_at"] != row["observed_at"]
                     or operational["entry_at"] != row["source_bar_at"]
+                    or operational["model"].get("anchor_version") != row["anchor_version"]
+                    or operational["timeout_at"] != row["available_at"]
                     or abs(float(operational["entry_price"]) - float(row["reference_price"])) > 1e-9):
                 raise ValueError("El objetivo operativo no coincide con la observación firmada.")
         with self.database.transaction() as connection:
@@ -820,7 +832,7 @@ class PortfolioRepository:
         """
         from .services.directional_collection import HORIZON_MINUTES, SUPPORTED_COLLECTION_PROTOCOLS
         from .services.model_execution_record import execution_id
-        from .services.model_observations import VERSION, canonical, valid_observation
+        from .services.model_observations import VERSION, PREVIOUS_VERSION, canonical, valid_observation
         from .services.scenario_calibration import validate_contract
 
         if not isinstance(run_id, str) or len(run_id) != 64 or any(
@@ -830,19 +842,19 @@ class PortfolioRepository:
         with self.database.connect() as connection:
             stored = connection.execute(
                 """SELECT * FROM live_model_observations
-                   WHERE integrity_version=? AND CASE WHEN json_valid(parameters_json)
+                   WHERE integrity_version IN (?, ?) AND CASE WHEN json_valid(parameters_json)
                        THEN json_extract(parameters_json, '$.replay.run_id') END=?
                    ORDER BY horizon_minutes""",
-                (VERSION, run_id),
+                (VERSION, PREVIOUS_VERSION, run_id),
             ).fetchall()
             child_rows = connection.execute(
                 """SELECT operational_model_outcomes.* FROM operational_model_outcomes
                    JOIN live_model_observations
                      ON live_model_observations.id=operational_model_outcomes.observation_id
-                   WHERE live_model_observations.integrity_version=?
+                   WHERE live_model_observations.integrity_version IN (?, ?)
                      AND CASE WHEN json_valid(live_model_observations.parameters_json)
                          THEN json_extract(live_model_observations.parameters_json, '$.replay.run_id') END=?""",
-                (VERSION, run_id),
+                (VERSION, PREVIOUS_VERSION, run_id),
             ).fetchall()
         if len(stored) != len(HORIZON_MINUTES) or not all(valid_observation(row) for row in stored):
             return None
@@ -856,7 +868,7 @@ class PortfolioRepository:
                 validate_operational_contract, valid_operational_outcome,
             )
             from .services.directional_collection import (
-                COLLECTION_PROTOCOL, LEGACY_COLLECTION_PROTOCOL,
+                COLLECTION_PROTOCOL, PREVIOUS_COLLECTION_PROTOCOL, LEGACY_COLLECTION_PROTOCOL,
             )
             replay = metadata[0]["replay"]
             if not isinstance(replay, dict) or any(
@@ -868,7 +880,9 @@ class PortfolioRepository:
             if (stored_protocol not in SUPPORTED_COLLECTION_PROTOCOLS
                     or replay["run_id"] != execution_id(symbol, session, stored_protocol)):
                 return None
-            requires_operational_target = stored_protocol == COLLECTION_PROTOCOL
+            requires_operational_target = stored_protocol in {
+                PREVIOUS_COLLECTION_PROTOCOL, COLLECTION_PROTOCOL,
+            }
             if stored_protocol == LEGACY_COLLECTION_PROTOCOL:
                 # V1 predates the first-passage target.  It remains valid
                 # directional evidence, but must never be silently upgraded
@@ -915,6 +929,7 @@ class PortfolioRepository:
                     "engine_revision": contract["model"]["engine_revision"],
                     "prediction": snapshot,
                     "observed_at": row["observed_at"],
+                    "anchor_version": row["anchor_version"],
                     "available_at": row["available_at"],
                     "reference_price": row["reference_price"],
                     "predicted_direction": row["predicted_direction"],
@@ -1199,7 +1214,7 @@ class PortfolioRepository:
         from .services.model_observations import (
             utc_timestamp, is_regular_close, exact_closed_prices,
             exact_daily_closed_prices, valid_observation, resolution_digest,
-            POLICY, SESSION_HORIZONS,
+            POLICY, PREVIOUS_POLICY, SESSION_HORIZONS,
         )
         if current_price is not None:
             raise ValueError("No se permite resolver con precio actual; proporciona velas históricas de 5m.")
@@ -1226,7 +1241,7 @@ class PortfolioRepository:
                     row.update(resolution_status="INVALID_MARKET_CLOSED", resolved_at=now.isoformat())
                 else:
                     session_based = (
-                        row["horizon_policy"] == POLICY
+                        row["horizon_policy"] in {POLICY, PREVIOUS_POLICY}
                         and int(row["horizon_minutes"]) in SESSION_HORIZONS
                     )
                     prices = daily_prices if session_based else intraday_prices
@@ -1256,13 +1271,13 @@ class PortfolioRepository:
 
     def pending_live_model_symbols(self, as_of: datetime) -> tuple[str, ...]:
         """Symbols with due signed V3 forecasts, independent of zone predictions."""
-        from .services.model_observations import VERSION, utc_timestamp
+        from .services.model_observations import VERSION, PREVIOUS_VERSION, utc_timestamp
         with self.database.connect() as connection:
             rows = connection.execute(
                 """SELECT DISTINCT symbol FROM live_model_observations
-                   WHERE integrity_version=? AND resolution_status='PENDING'
+                   WHERE integrity_version IN (?, ?) AND resolution_status='PENDING'
                      AND available_at<=? ORDER BY symbol""",
-                (VERSION, utc_timestamp(as_of).isoformat()),
+                (VERSION, PREVIOUS_VERSION, utc_timestamp(as_of).isoformat()),
             ).fetchall()
         return tuple(row["symbol"] for row in rows)
 
@@ -1302,6 +1317,58 @@ class PortfolioRepository:
                     brier_score=brier, brier_holdout_samples=len(holdout),
                     decision_eligible=False,
                     scope="AGGREGATE_DIAGNOSTIC_ONLY")
+
+    def operational_event_coverage(self, symbol: str, limit: int = 100) -> dict[str, Any]:
+        """Group hash-verified horizons sharing one entry/barrier plan into one event."""
+        from .services.operational_coverage import summarize_operational_events
+        from .services.model_observations import VERSION, PREVIOUS_VERSION
+
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """SELECT CASE WHEN json_valid(parameters_json)
+                          THEN json_extract(parameters_json, '$.replay.run_id') END AS run_id,
+                          MAX(observed_at) AS emitted
+                   FROM live_model_observations
+                   WHERE symbol=? AND integrity_version IN (?, ?)
+                     AND CASE WHEN json_valid(parameters_json)
+                         THEN json_extract(parameters_json, '$.replay.run_id') END IS NOT NULL
+                   GROUP BY run_id ORDER BY emitted DESC LIMIT ?""",
+                (symbol.strip().upper(), VERSION, PREVIOUS_VERSION, max(1, min(limit, 1000))),
+            ).fetchall()
+        records = (self.live_model_execution_record(row["run_id"]) for row in rows)
+        return summarize_operational_events(record for record in records if record is not None)
+
+    def operational_validation_counts(self, symbol: str) -> dict[str, dict[str, int]]:
+        """Verified forward counts by horizon; hypothetical hits are not eligible entries."""
+        from .services.directional_collection import HORIZON_MINUTES
+        from .services.model_observations import VERSION, PREVIOUS_VERSION
+
+        counts = {label: {"resolved": 0, "eligible": 0} for label in HORIZON_MINUTES}
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """SELECT CASE WHEN json_valid(parameters_json)
+                          THEN json_extract(parameters_json, '$.replay.run_id') END AS run_id
+                   FROM live_model_observations
+                   WHERE symbol=? AND integrity_version IN (?, ?)
+                     AND CASE WHEN json_valid(parameters_json)
+                         THEN json_extract(parameters_json, '$.replay.run_id') END IS NOT NULL
+                   GROUP BY run_id""",
+                (symbol.strip().upper(), VERSION, PREVIOUS_VERSION),
+            ).fetchall()
+        for row in rows:
+            record = self.live_model_execution_record(row["run_id"])
+            if record is None:
+                continue  # Partial or hash-invalid cohorts are never evidence.
+            for prediction in record["predictions"]:
+                label = prediction["horizon"]
+                target = prediction.get("operational_target") or {}
+                result = prediction.get("operational_result") or {}
+                if label not in counts or result.get("resolution_status") != "RESOLVED":
+                    continue
+                counts[label]["resolved"] += 1
+                if target.get("eligible_at_emission") is True:
+                    counts[label]["eligible"] += 1
+        return counts
 
     def live_model_calibration_samples(
         self, symbol: str, *, horizon_minutes: int = 390, limit: int = 2000,

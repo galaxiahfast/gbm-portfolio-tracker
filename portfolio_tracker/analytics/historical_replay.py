@@ -24,17 +24,20 @@ from .operational_target import (
     resolve_operational_outcome,
 )
 from .replay import ReplayDataset, evaluate_replay_cut
+from .temporal_contract import (
+    ANCHOR_VERSION, BAR, maturity as replay_target_close, scheduled_cut,
+)
 from ..services.directional_collection import HORIZON_MINUTES, cut_forecasts
 from ..services.model_observations import (
     canonical,
     exact_closed_prices,
     exact_daily_closed_prices,
-    maturity,
 )
 from ..services.scenario_calibration import outcome_class
 
 
-HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V1"
+LEGACY_HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V1"
+HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V2"
 DEFAULT_PARAMETERS = {
     "minimum_probability": 0.55,
     "stop_atr_multiple": 2.25,
@@ -71,8 +74,8 @@ def fixed_historical_cuts(dataset: ReplayDataset, *, start=None, end=None) -> tu
     available = pd.DatetimeIndex(dataset.intraday.index).tz_convert("UTC")
     cuts = []
     for session in schedule.itertuples():
-        cut = utc(session.open) + pd.Timedelta(minutes=90)
-        source_open = cut - pd.Timedelta(minutes=5)
+        cut = scheduled_cut(session.open)
+        source_open = cut - BAR
         if cut <= dataset.as_of and cut <= utc(session.close) and source_open in available:
             cuts.append(cut)
     return tuple(cuts)
@@ -199,13 +202,17 @@ def _cut_record(
         elif canonical(replay) != canonical(shared_replay):
             raise ValueError("Los seis horizontes no comparten el mismo snapshot causal.")
         minutes = int(row["horizon_minutes"])
-        due = maturity(cut, minutes)
+        due = replay_target_close(cut, minutes)
         scenario_contract = metadata["scenario_contract"]
         operational_contract = metadata["operational_contract"]
+        if due.isoformat() != operational_contract["timeout_at"]:
+            raise ValueError("El vencimiento direccional difiere del operativo.")
         horizons.append({
             "label": next(label for label, value in HORIZON_MINUTES.items() if value == minutes),
             "horizon_minutes": minutes,
             "prediction": metadata["prediction_snapshot"],
+            "model_prediction": metadata.get("model_prediction_snapshot"),
+            "model_feature_contract": metadata.get("model_feature_contract"),
             "scenario_contract": scenario_contract,
             "scenario_result": _scenario_label(
                 scenario_contract,
@@ -226,6 +233,7 @@ def _cut_record(
         }),
         "symbol": symbol,
         "observed_at": cut.isoformat(),
+        "anchor_version": ANCHOR_VERSION,
         "source_bar_closed_at": analysis.source_bar_closed_at.isoformat(),
         "dataset_sha256": dataset_sha256,
         "feature_snapshot": shared_replay,
@@ -335,7 +343,8 @@ def build_historical_replay(
 def validate_historical_replay(payload) -> bool:
     """Fail closed when a cut, outcome, feature snapshot or manifest changed."""
 
-    if not isinstance(payload, dict) or payload.get("contract") != HISTORICAL_REPLAY_CONTRACT:
+    if (not isinstance(payload, dict) or payload.get("contract") not in {
+            LEGACY_HISTORICAL_REPLAY_CONTRACT, HISTORICAL_REPLAY_CONTRACT}):
         raise ValueError("Contrato de replay histórico desconocido.")
     observations = payload.get("observations")
     if not isinstance(observations, list):
@@ -356,7 +365,7 @@ def validate_historical_replay(payload) -> bool:
     if payload.get("content_sha256") != _sha(deterministic):
         raise ValueError("Firma del replay histórico inválida.")
     expected_replay_id = _sha({
-        "contract": HISTORICAL_REPLAY_CONTRACT,
+        "contract": payload["contract"],
         "symbol": payload.get("symbol"),
         "dataset_sha256": payload.get("dataset_sha256"),
         "parameters": payload.get("parameters"),

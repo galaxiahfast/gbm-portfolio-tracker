@@ -8,12 +8,15 @@ import pandas as pd
 import pytest
 
 from portfolio_tracker.analytics.closed_bars import _calendar
-from portfolio_tracker.analytics.horizon_models import FEATURE_NAMES, HorizonSample, _sha
+from portfolio_tracker.analytics.horizon_models import (
+    FEATURE_NAMES, MODEL_FEATURE_VERSION, HorizonSample, _sha,
+)
 from portfolio_tracker.analytics.operational_calibration import predict_calibrated_scores
 from portfolio_tracker.analytics.nested_walk_forward import (
     EMBARGO_SESSIONS,
     NESTED_WALK_FORWARD_CONTRACT,
     WalkForwardConfig,
+    minimum_samples_for_horizon,
     embargo_and_purge_before,
     nested_walk_forward_horizon,
     validate_nested_walk_forward_artifact,
@@ -53,12 +56,20 @@ def _samples(size=420, *, informative=True):
             features=tuple(values),
             outcome=("TP_FIRST", "SL_FIRST", "TIMEOUT")[category],
             cut_id=f"cut-{index}",
+            eligible_at_emission=True,
+            feature_version=MODEL_FEATURE_VERSION,
+            available_features=tuple(FEATURE_NAMES),
+            sl_loss_multiple=(1.5 if index % 18 == 1 else 1.0) if category == 1 else None,
+            sl_exit_source="5m:gap-open" if index % 18 == 1 else "5m:barrier",
+            entry_side="LONG",
         ))
     return tuple(rows)
 
 
-def test_nested_walk_forward_opens_sealed_holdout_only_after_development_skill():
-    result = nested_walk_forward_horizon("1 Hora", _samples(), _config())
+def test_nested_walk_forward_opens_sealed_holdout_only_after_development_skill(tmp_path):
+    result = nested_walk_forward_horizon(
+        "1 Hora", _samples(), _config(), registry_path=tmp_path / "openings.sqlite"
+    )
     assert result["status"] == "APPROVED_SEALED_HOLDOUT_CALIBRATED"
     assert result["promotable"] is True
     assert result["embargo_sessions"] == EMBARGO_SESSIONS["1 Hora"] == 1
@@ -67,24 +78,44 @@ def test_nested_walk_forward_opens_sealed_holdout_only_after_development_skill()
     assert result["final_holdout"]["status"] == "OPENED_ONCE_AFTER_PROTOCOL_FREEZE"
     assert result["final_holdout"]["metrics"]["source"] == "SEALED_FINAL_HOLDOUT_ONLY"
     assert result["final_holdout"]["metrics"]["opened_against_protocol_sha256"] == result["protocol_frozen_sha256"]
+    assert result["final_holdout"]["opening"]["member_count"] == result["final_holdout"]["samples"]
+    for name in ("brier", "baseline_brier", "log_loss", "baseline_log_loss", "raw_brier", "raw_log_loss", "accuracy"):
+        ci = result["final_holdout"]["metrics"]["confidence_intervals"][name]
+        assert ci["lower"] <= result["final_holdout"]["metrics"][name] <= ci["upper"]
     assert result["model"]["trained_on"] == "DEVELOPMENT_ONLY_FINAL_HOLDOUT_EXCLUDED"
     assert result["calibration"]["approved"] is True
     assert result["calibration"]["validation_metrics"]["calibrated"]["brier"] < result["calibration"]["validation_metrics"]["baseline"]["brier"]
     assert result["final_holdout"]["metrics"]["brier"] < result["final_holdout"]["metrics"]["raw_brier"]
-    prediction = predict_calibrated_scores(result, _samples(1)[0].features)
+    prediction = predict_calibrated_scores(
+        result, _samples(1)[0].features,
+        feature_version=MODEL_FEATURE_VERSION,
+        available_features=_samples(1)[0].available_features,
+    )
+    with pytest.raises(ValueError, match="train/live incompatibles"):
+        predict_calibrated_scores(
+            result, _samples(1)[0].features,
+            feature_version=MODEL_FEATURE_VERSION,
+            available_features=_samples(1)[0].available_features[:-1],
+        )
     assert prediction["semantics"] == "HISTORICAL_OOS_CALIBRATED_PRELIMINARY"
     assert sum(prediction["scores"].values()) == pytest.approx(1.0)
 
 
-def test_final_holdout_labels_cannot_change_selection_or_fitted_model():
+def test_final_holdout_labels_cannot_change_selection_or_fitted_model(tmp_path):
     original = _samples()
     holdout_size = max(60, int(np.ceil(len(original) * 0.20)))
     changed = original[:-holdout_size] + tuple(
         replace(row, outcome="SL_FIRST" if row.outcome != "SL_FIRST" else "TP_FIRST")
         for row in original[-holdout_size:]
     )
-    before = nested_walk_forward_horizon("1 Hora", original, _config())
-    after = nested_walk_forward_horizon("1 Hora", changed, _config())
+    # Isolated audit sandboxes compare protocols; a production registry forbids
+    # this second opening, as asserted in the separate reuse regression.
+    before = nested_walk_forward_horizon(
+        "1 Hora", original, _config(), registry_path=tmp_path / "before.sqlite"
+    )
+    after = nested_walk_forward_horizon(
+        "1 Hora", changed, _config(), registry_path=tmp_path / "after.sqlite"
+    )
     assert before["walk_forward"] == after["walk_forward"]
     before_protocol = dict(before["frozen_protocol"])
     after_protocol = dict(after["frozen_protocol"])
@@ -147,6 +178,57 @@ def test_short_history_keeps_holdout_sealed_and_unopened():
     assert result["embargo_sessions"] == 126
     assert result["final_holdout"]["metrics"] is None
     assert result["protocol_frozen_sha256"] is None
+    assert minimum_samples_for_horizon("6 Meses", _config()) > 300
+
+
+def test_opened_holdout_cannot_be_reused_even_when_labels_change(tmp_path):
+    from portfolio_tracker.analytics.holdout_registry import (
+        HoldoutAlreadyOpenedError, verify_holdout_opening,
+    )
+
+    original = _samples()
+    registry = tmp_path / "openings.sqlite"
+    first = nested_walk_forward_horizon(
+        "1 Hora", original, _config(), registry_path=registry,
+        symbol="SMCI", dataset_sha256="a" * 64,
+    )
+    assert first["final_holdout"]["opening"]["opened_at_utc"]
+    assert verify_holdout_opening(
+        first["final_holdout"]["opening"], symbol="SMCI", horizon="1 Hora",
+        protocol_sha256=first["protocol_frozen_sha256"],
+        commitment_sha256=first["final_holdout"]["commitment_sha256"],
+    )
+    assert not verify_holdout_opening(
+        first["final_holdout"]["opening"], symbol="NVDA", horizon="1 Hora",
+        protocol_sha256=first["protocol_frozen_sha256"],
+        commitment_sha256=first["final_holdout"]["commitment_sha256"],
+    )
+    with pytest.raises(HoldoutAlreadyOpenedError, match="ya abierto"):
+        nested_walk_forward_horizon(
+            "1 Hora", original, _config(), registry_path=registry,
+            symbol="SMCI", dataset_sha256="a" * 64,
+        )
+    changed = original[:-1] + (replace(original[-1], outcome="SL_FIRST"),)
+    with pytest.raises(HoldoutAlreadyOpenedError, match="ya abierto"):
+        nested_walk_forward_horizon(
+            "1 Hora", changed, _config(), registry_path=registry,
+            symbol="SMCI", dataset_sha256="b" * 64,
+        )
+
+
+def test_final_holdout_missing_losses_and_timeouts_never_promotes(tmp_path):
+    rows = _samples()
+    holdout_size = max(60, int(np.ceil(len(rows) * 0.20)))
+    rows = rows[:-holdout_size] + tuple(
+        replace(row, outcome="TP_FIRST") for row in rows[-holdout_size:]
+    )
+    result = nested_walk_forward_horizon(
+        "1 Hora", rows, _config(), registry_path=tmp_path / "openings.sqlite"
+    )
+    assert result["status"] == "REJECTED_FINAL_HOLDOUT_CLASS_SUPPORT"
+    assert result["promotable"] is False
+    assert result["model"] is None
+    assert result["final_holdout"]["metrics"]["class_counts"]["SL_FIRST"] == 0
 
 
 def test_walk_forward_artifact_detects_tampering():

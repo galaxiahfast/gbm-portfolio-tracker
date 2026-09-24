@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 import json
 from zoneinfo import ZoneInfo
@@ -10,12 +10,18 @@ from zoneinfo import ZoneInfo
 from .model_observations import is_regular_close, utc_timestamp
 from .model_execution_record import build_replay_snapshot, prediction_snapshot
 from portfolio_tracker.analytics.operational_target import make_operational_contract
+from portfolio_tracker.analytics.temporal_contract import (
+    ANCHOR_VERSION, is_actionable_emission, scheduled_cut,
+)
 from .scenario_calibration import make_scenario_contract
 
 NY = ZoneInfo("America/New_York")
 LEGACY_COLLECTION_PROTOCOL = "XNYS_1100_WINDOW_V1"
-COLLECTION_PROTOCOL = "XNYS_1100_OPERATIONAL_TARGET_V2"
-SUPPORTED_COLLECTION_PROTOCOLS = {LEGACY_COLLECTION_PROTOCOL, COLLECTION_PROTOCOL}
+PREVIOUS_COLLECTION_PROTOCOL = "XNYS_1100_OPERATIONAL_TARGET_V2"
+COLLECTION_PROTOCOL = "XNYS_1100_OPERATIONAL_TARGET_V3"
+SUPPORTED_COLLECTION_PROTOCOLS = {
+    LEGACY_COLLECTION_PROTOCOL, PREVIOUS_COLLECTION_PROTOCOL, COLLECTION_PROTOCOL,
+}
 HORIZON_MINUTES = {
     "1 Hora": 60,
     "6 Horas": 360,
@@ -47,13 +53,13 @@ def cut_forecasts(
     """
     observed = utc_timestamp(observed_at)
     local = observed.tz_convert(NY)
-    if not time(11) <= local.time() < time(11, 20):
-        raise ValueError("La emisión direccional requiere la ventana 11:00–11:20 NY.")
     source = utc_timestamp(analysis.source_bar_closed_at)
     if not (source <= observed < source + timedelta(minutes=5)) or not is_regular_close(source):
         raise ValueError("La observación requiere el último cierre de 5m, no una vela abierta o antigua.")
     if source.tz_convert(NY).date() != local.date():
         raise ValueError("La vela fuente debe pertenecer a la sesión actual.")
+    if not is_actionable_emission(observed, source):
+        raise ValueError("Corte no accionable: se requiere la vela 11:00 NY y su ventana causal de emisión.")
     horizons = {item.label: item for item in analysis.horizon_projections}
     if set(horizons) != set(HORIZON_MINUTES):
         raise ValueError("Se requieren los seis horizontes direccionales completos.")
@@ -63,11 +69,20 @@ def cut_forecasts(
         input_artifacts=input_artifacts,
     )
     rows = []
+    from portfolio_tracker.analytics.horizon_models import model_feature_contract
+    from .model_execution_record import technical_horizon
     for label, minutes in HORIZON_MINUTES.items():
         horizon = horizons[label]
+        model_prediction = prediction_snapshot(technical_horizon(analysis, label))
         contract = make_scenario_contract(analysis.symbol, horizon, minutes, model_parameters)
         operational_contract = make_operational_contract(
             analysis.symbol, horizon, minutes, analysis, observed_at, model_parameters,
+        )
+        model_manifest = model_feature_contract(
+            {"feature_snapshot": replay},
+            {"prediction": prediction_snapshot(horizon),
+             "model_prediction": model_prediction,
+             "operational_contract": operational_contract},
         )
         rows.append(dict(
             horizon_minutes=minutes,
@@ -80,10 +95,13 @@ def cut_forecasts(
                 "operational_contract": operational_contract,
                 "primary_validation_target": operational_contract["version"],
                 "collection_protocol": protocol,
-                "scheduled_cut_ny": "11:00",
+                "scheduled_cut_ny": scheduled_cut(observed).tz_convert(NY).strftime("%H:%M"),
+                "anchor_version": ANCHOR_VERSION,
                 "session_date": local.date().isoformat(),
                 "replay": replay,
                 "prediction_snapshot": prediction_snapshot(horizon),
+                "model_prediction_snapshot": model_prediction,
+                "model_feature_contract": model_manifest,
             }, sort_keys=True, allow_nan=False),
         ))
     return rows

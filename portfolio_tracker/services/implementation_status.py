@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-LAST_VERIFIED_TESTS = 419
+LAST_VERIFIED_TESTS = 426
 LAST_VERIFIED_DATE = "2026-09-22"
 
 
@@ -46,6 +46,7 @@ MILESTONES = (
     ImplementationMilestone("Modelos regularizados por horizonte", "Clasificadores L2 aislados por símbolo/horizonte, split 60/20/20 purgado y holdout exclusivo; promoción vetada sin muestra suficiente.", "complete", 1.0),
     ImplementationMilestone("Walk-forward anidado y holdout sellado", "Selección L2 interna, evaluación externa, embargo XNYS por horizonte y apertura única del holdout tras congelar el protocolo.", "complete", 1.0),
     ImplementationMilestone("Calibración condicionada por habilidad OOS", "Temperatura multiclase ajustada en OOF temprano, validada en OOF posterior y evaluada contra score crudo y baseline en holdout sellado.", "complete", 1.0),
+    ImplementationMilestone("Selección por expectativa neta", "Ranking TP/SL/timeout calibrado tras comisión, deslizamiento, R:R neto, riesgo 2%, efectivo y concentración; sin modelo aprobado, ESPERAR.", "complete", 1.0),
 )
 
 

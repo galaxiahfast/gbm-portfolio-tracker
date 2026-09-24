@@ -4,11 +4,14 @@ from __future__ import annotations
 import pytest
 
 from portfolio_tracker.analytics.net_expectation import (
+    FillModel,
     TradingCostPolicy,
     evaluate_long_opportunity,
     select_highest_net_expectation,
 )
 from portfolio_tracker.services.operational_model_registry import _approved_result
+from portfolio_tracker.analytics.operational_target import TARGET_VERSION
+from portfolio_tracker.analytics.horizon_models import FEATURE_NAMES, MODEL_FEATURE_VERSION, _sha
 
 
 def _opportunity(**overrides):
@@ -16,6 +19,7 @@ def _opportunity(**overrides):
         horizon="1 Día", entry=100, stop=95, take_profit=110,
         tp_first=0.8, sl_first=0.1, timeout=0.1,
         capital=10_000, cash=10_000,
+        observed_sl_loss_multiples=(1.0,) * 24,
     )
     arguments.update(overrides)
     return evaluate_long_opportunity(**arguments)
@@ -23,13 +27,40 @@ def _opportunity(**overrides):
 
 def test_net_expectation_deducts_both_sides_and_stresses_timeout():
     item = _opportunity()
-    assert item.net_tp_per_share == pytest.approx(9.37)
-    assert item.net_sl_per_share == pytest.approx(-5.585)
-    assert item.net_ev_per_share == pytest.approx(6.379)
+    assert item.theoretical_net_ev_per_share == pytest.approx(6.379)
+    assert item.net_sl_per_share < -5.585  # spread and slippage on observed fill
+    assert item.net_ev_per_share < item.theoretical_net_ev_per_share
+    assert item.observed_net_ev_per_share == item.net_ev_per_share
     assert item.shares == 30  # Concentration is tighter than the risk cap.
     assert item.net_ev_total == pytest.approx(item.net_ev_per_share * item.shares)
     assert item.monetary_risk <= item.risk_budget
     assert item.eligible is True
+
+
+def test_synthetic_gap_loss_distribution_changes_ev_and_risk():
+    from portfolio_tracker.analytics.horizon_models import _observed_stop_loss_multiple
+
+    contract = {"entry_price": 100, "stop_loss": 95, "side": "LONG"}
+    gap_result = {"outcome": "SL_FIRST", "exit_price": 90, "exit_source": "5m:gap-open"}
+    gap_multiple = _observed_stop_loss_multiple(contract, gap_result)
+    assert gap_multiple == 2.0
+    ordinary = _opportunity(observed_sl_loss_multiples=(1.0,) * 20)
+    gap = _opportunity(observed_sl_loss_multiples=(1.0,) * 19 + (gap_multiple,))
+    assert gap.net_sl_per_share < ordinary.net_sl_per_share
+    assert gap.net_ev_per_share < ordinary.net_ev_per_share
+    assert gap.shares < ordinary.shares
+    assert gap.theoretical_net_ev_per_share == ordinary.theoretical_net_ev_per_share
+
+
+def test_no_fill_and_spread_reduce_realistic_ev_without_changing_theoretical():
+    clean = _opportunity(fills=FillModel(no_fill_probability=0, spread_bps=0))
+    stressed = _opportunity(fills=FillModel(no_fill_probability=0.3, spread_bps=10))
+    assert stressed.fill_probability == pytest.approx(0.7)
+    assert stressed.net_ev_per_share < clean.net_ev_per_share
+    assert stressed.theoretical_net_ev_per_share == clean.theoretical_net_ev_per_share
+    missing = _opportunity(observed_sl_loss_multiples=())
+    assert not missing.eligible
+    assert "sin distribución observada" in missing.reason
 
 
 def test_higher_raw_tp_probability_does_not_win_if_net_portfolio_ev_is_lower():
@@ -76,11 +107,26 @@ def test_registry_rechecks_both_oos_baselines_before_promotion():
     record = {
         "status": "APPROVED_SEALED_HOLDOUT_CALIBRATED",
         "promotable": True,
+        "target": TARGET_VERSION,
+        "feature_version": MODEL_FEATURE_VERSION,
+        "feature_names": list(FEATURE_NAMES),
+        "feature_schema_sha256": _sha(list(FEATURE_NAMES)),
+        "available_features": list(FEATURE_NAMES),
+        "resolved_samples": 330,
+        "minimum_samples_required": 300,
+        "population": {"executable_entries": {"n": 330}},
+        "execution_evidence": {
+            "source": "ELIGIBLE_LONG_DEVELOPMENT_ONLY",
+            "observed_sl_samples": 20,
+            "gross_loss_multiples": [1.0] * 20,
+        },
         "score_semantics": "HISTORICAL_OOS_CALIBRATED_PRELIMINARY",
         "final_holdout": {"status": "OPENED_ONCE_AFTER_PROTOCOL_FREEZE", "metrics": metrics},
         "calibration": {"approved": True, "validation_metrics": validation},
     }
     assert _approved_result(record)
+    assert not _approved_result({**record, "execution_evidence": {}})
+    assert not _approved_result({**record, "population": {"executable_entries": {"n": 0}}})
     assert not _approved_result({**record, "final_holdout": {
         "status": "OPENED_ONCE_AFTER_PROTOCOL_FREEZE",
         "metrics": {**metrics, "brier": 0.40},

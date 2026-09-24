@@ -1,6 +1,6 @@
 """Read-only access to the latest sealed walk-forward model per symbol.
 
-Only the newest valid V2 artifact is considered. Rejected or insufficient
+Only the newest valid V4 artifact is considered. Rejected or insufficient
 retraining must not silently fall back to an older approved run.
 """
 from __future__ import annotations
@@ -15,6 +15,10 @@ from portfolio_tracker.analytics.nested_walk_forward import (
     NESTED_WALK_FORWARD_CONTRACT,
     validate_nested_walk_forward_artifact,
 )
+from portfolio_tracker.analytics.horizon_models import (
+    FEATURE_NAMES, MODEL_FEATURE_VERSION, PROFESSIONAL_MINIMUM_SAMPLES, _sha,
+)
+from portfolio_tracker.analytics.operational_target import TARGET_VERSION
 
 
 DEFAULT_MODEL_DIRECTORY = Path(__file__).resolve().parents[2] / "output" / "nested_walk_forward"
@@ -31,9 +35,38 @@ def _strict_improvement(candidate, reference) -> bool:
 def _approved_result(row) -> bool:
     if (row.get("status") != "APPROVED_SEALED_HOLDOUT_CALIBRATED"
             or row.get("promotable") is not True
+            or row.get("target") != TARGET_VERSION
+            or row.get("feature_version") != MODEL_FEATURE_VERSION
+            or row.get("feature_names") != list(FEATURE_NAMES)
+            or row.get("feature_schema_sha256") != _sha(list(FEATURE_NAMES))
+            or row.get("available_features") != list(FEATURE_NAMES)
             or row.get("score_semantics") != "HISTORICAL_OOS_CALIBRATED_PRELIMINARY"):
         return False
+    population = (row.get("population") or {}).get("executable_entries") or {}
+    try:
+        eligible_n = int(population.get("n") or 0)
+        required_n = max(
+            PROFESSIONAL_MINIMUM_SAMPLES,
+            int(row.get("minimum_samples_required") or PROFESSIONAL_MINIMUM_SAMPLES),
+        )
+        resolved_n = int(row.get("resolved_samples") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    # Old artifacts trained on hypothetical barriers cannot authorize trades.
+    if eligible_n < required_n or resolved_n != eligible_n:
+        return False
     final = row.get("final_holdout") or {}
+    stop_evidence = row.get("execution_evidence") or {}
+    multiples = stop_evidence.get("gross_loss_multiples") or ()
+    if (stop_evidence.get("source") != "ELIGIBLE_LONG_DEVELOPMENT_ONLY"
+            or stop_evidence.get("observed_sl_samples") != len(multiples)
+            or len(multiples) < 20):
+        return False
+    try:
+        if any(not math.isfinite(float(value)) or float(value) < 1 for value in multiples):
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return False
     calibration = row.get("calibration") or {}
     validation = calibration.get("validation_metrics") or {}
     metrics = final.get("metrics") or {}

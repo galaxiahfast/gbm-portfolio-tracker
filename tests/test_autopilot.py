@@ -15,7 +15,7 @@ from portfolio_tracker.repository import PortfolioRepository
 from portfolio_tracker.services.price_zones import DisplayZone, ZoneSnapshot
 from portfolio_tracker.analytics.zone_reach import ReachEstimate
 from portfolio_tracker.services.zone_forward import ZonePrediction
-from portfolio_tracker.services.directional_collection import HORIZON_MINUTES, fixed_cut_forecasts
+from portfolio_tracker.services.directional_collection import HORIZON_MINUTES, fixed_cut_forecasts, record_fixed_directional
 from portfolio_tracker.services.model_observations import POLICY, VERSION
 from tests.test_zone_forward import market, prediction
 
@@ -68,7 +68,7 @@ def test_refuse_outdated_operational_schema_before_scheduled_work(tmp_path):
     PortfolioRepository(database).ensure_zone_forward_schema()
     with database.transaction() as connection:
         connection.execute("DELETE FROM schema_migrations WHERE version=12")
-    with pytest.raises(ValueError, match="se requiere v12"):
+    with pytest.raises(ValueError, match="se requiere v13"):
         runtime.open_repository(target)
 
 
@@ -81,6 +81,38 @@ def test_os_lock_released_after_exception(tmp_path):
         with pytest.raises(OSError):
             with runtime.exclusive_job(path):
                 pass
+
+
+def test_scheduled_collector_retries_lock_inside_window(caplog):
+    moments = iter(pd.Timestamp(value).to_pydatetime() for value in (
+        "2026-09-03T15:00:10Z", "2026-09-03T15:00:10Z",
+        "2026-09-03T15:00:40Z", "2026-09-03T15:00:40Z",
+    ))
+    attempts = []
+    def attempt():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise BlockingIOError("lock")
+        return 0
+    assert runtime.retry_scheduled_collection(
+        attempt, logging.getLogger("retry-test"), now_fn=lambda: next(moments),
+        sleep_fn=lambda _: None,
+    ) == 0
+    assert len(attempts) == 2
+    assert "ALERTA_CORTE_EN_RIESGO" in caplog.text
+
+
+def test_scheduled_collector_never_retries_after_window(caplog):
+    moments = iter(pd.Timestamp(value).to_pydatetime() for value in (
+        "2026-09-03T15:19:40Z", "2026-09-03T15:19:40Z",
+    ))
+    attempts = []
+    assert runtime.retry_scheduled_collection(
+        lambda: attempts.append(1) or 1, logging.getLogger("retry-test"),
+        now_fn=lambda: next(moments), sleep_fn=lambda _: pytest.fail("late retry"),
+    ) == 1
+    assert len(attempts) == 1
+    assert "ALERTA_CORTE_PERDIDO" in caplog.text
 
 
 def synthetic_snapshot(now):
@@ -96,6 +128,7 @@ def synthetic_analysis(symbol, source="2026-09-03T15:00:00Z"):
         range_low=99., range_high=101., engine_name="test",
     ) for label in HORIZON_MINUTES)
     return SimpleNamespace(symbol=symbol, last_price=100.,
+                           market_regime="TREND", macro_permission="LONG_ONLY",
                            source_bar_closed_at=pd.Timestamp(source),
                            horizon_projections=horizons,
                            execution_levels=SimpleNamespace(
@@ -103,6 +136,20 @@ def synthetic_analysis(symbol, source="2026-09-03T15:00:00Z"):
                            ), activation_trigger_met=True,
                            execution_plan_conditional=False, risk_veto=False,
                            signal_rejected=False)
+
+
+def test_boot_audits_missing_session_without_backdating(repo, caplog):
+    assert record_fixed_directional(repo, synthetic_analysis("SMCI"), {}, UTC_TIME) == 6
+    with repo.database.connect() as connection:
+        before = connection.execute("SELECT COUNT(*) FROM live_model_observations").fetchone()[0]
+    missing = runtime.audit_recent_missing_cuts(
+        repo, ["SMCI"], logging.getLogger("boot-audit"),
+        now=pd.Timestamp("2026-09-08T13:05:00Z").to_pydatetime(), sessions=2,
+    )
+    assert missing == (("SMCI", "2026-09-04"),)
+    assert "ALERTA_CORTE_PERDIDO SMCI 2026-09-04" in caplog.text
+    with repo.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM live_model_observations").fetchone()[0] == before
 
 
 def test_collection_six_each_idempotent_and_no_ledger_writes(repo, tmp_path, monkeypatch):
@@ -180,7 +227,8 @@ def test_fixed_cut_later_retry_does_not_create_another_cohort(repo):
     assert record_fixed_directional(repo, first, {}, UTC_TIME) == 6
     later = synthetic_analysis("SMCI", "2026-09-03T15:05:00Z")
     retry_at = pd.Timestamp("2026-09-03T15:05:10Z").to_pydatetime()
-    assert record_fixed_directional(repo, later, {}, retry_at) == 0
+    with pytest.raises(ValueError, match="Corte no accionable"):
+        record_fixed_directional(repo, later, {}, retry_at)
     assert repo.verify_live_model_observations() == (6, ())
 
 
@@ -199,8 +247,8 @@ def test_directional_resolver_uses_exact_historical_close_without_zone_rows(repo
     with repo.database.connect() as connection:
         row = connection.execute("""SELECT * FROM live_model_observations
                                     WHERE symbol='NVDA' AND horizon_minutes=60""").fetchone()
-        assert row["outcome_price"] == "101.0"
-        assert row["outcome_bar_at"] == "2026-09-03T16:00:00+00:00"
+        assert row["outcome_price"] == "120.0"
+        assert row["outcome_bar_at"] == "2026-09-03T16:05:00+00:00"
         assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
     assert repo.verify_live_model_observations() == (6, ())
     assert repo.cash_balance_usd() == cash_before

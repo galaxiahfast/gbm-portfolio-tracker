@@ -1,11 +1,12 @@
 """Causal, versioned contracts for live forecasts; no accounting or network I/O.
 
 ``observed_at`` is the emission instant and ``available_at`` is the exact XNYS
-bar/session close at which the target becomes knowable.  Version 3 counts only
-regular-market time: intraday horizons skip nights, weekends, holidays and
-early-close gaps, while daily/weekly/monthly horizons mature after a fixed
-number of *future exchange sessions*.  Version 2 remains verifiable for audit,
-but is never mixed into the current calibration cohort.
+bar/session close at which the target becomes knowable. Version 4 uses the
+shared XNYS anchor: the first fully prospective 5m candle follows emission,
+and intraday horizons count trading minutes from that boundary. Session-based
+horizons still mature after a fixed number of future exchange sessions.
+Versions 2 and 3 remain verifiable for audit, but are never mixed into the
+current calibration cohort.
 
 SHA-256 detects tampering, not authenticity against rewriting all hashes.
 """
@@ -20,27 +21,27 @@ from decimal import Decimal, InvalidOperation
 import pandas as pd
 
 from portfolio_tracker.analytics.closed_bars import NY, _calendar
+from portfolio_tracker.analytics.temporal_contract import (
+    ANCHOR_VERSION, SESSION_HORIZONS, MAX_INTRADAY_MINUTES,
+    maturity as anchored_maturity,
+)
 
 LEGACY_VERSION = 2
 LEGACY_POLICY = "WALL_CLOCK_CEIL_5M_XNYS_V2"
-VERSION = 3
-POLICY = "XNYS_TRADING_MINUTES_AND_FUTURE_SESSIONS_V3"
+PREVIOUS_VERSION = 3
+PREVIOUS_POLICY = "XNYS_TRADING_MINUTES_AND_FUTURE_SESSIONS_V3"
+VERSION = 4
+POLICY = "XNYS_1100_NEXT_FULL_5M_V4"
 
-# Public identifiers are intentionally unchanged so historical reports and
-# scenario contracts remain readable.  Their interpretation is now explicit.
-SESSION_HORIZONS = {
-    1_440: 1,      # next XNYS session close
-    10_080: 5,     # fifth future XNYS session close
-    43_200: 21,    # twenty-first future XNYS session close
-    259_200: 126,  # one trading half-year
-}
-MAX_INTRADAY_MINUTES = 390
-FORECAST_FIELDS = (
+# Public horizon identifiers remain unchanged; V3 and V4 semantics are
+# distinguished by the signed horizon_policy and anchor_version.
+PREVIOUS_FORECAST_FIELDS = (
     "symbol", "observed_at", "available_at", "horizon_minutes",
     "reference_price", "raw_probability_up", "predicted_direction",
     "parameters_json", "source_bar_at", "horizon_policy", "integrity_version",
     "created_at",
 )
+FORECAST_FIELDS = (*PREVIOUS_FORECAST_FIELDS, "anchor_version")
 RESOLUTION_FIELDS = (
     "outcome_price", "outcome_up", "successful", "resolved_at",
     "outcome_bar_at", "outcome_source", "resolution_status",
@@ -109,7 +110,9 @@ def maturity(observed_at, horizon_minutes: int, *, policy: str = POLICY) -> pd.T
     observed = utc_timestamp(observed_at)
     if policy == LEGACY_POLICY:
         return (observed + pd.Timedelta(minutes=horizon_minutes)).ceil("5min")
-    if policy != POLICY:
+    if policy == POLICY:
+        return anchored_maturity(observed, horizon_minutes)
+    if policy != PREVIOUS_POLICY:
         raise ValueError("Política temporal desconocida.")
     if horizon_minutes in SESSION_HORIZONS:
         return _future_session_maturity(observed, SESSION_HORIZONS[horizon_minutes])
@@ -138,11 +141,13 @@ def canonical(payload) -> str:
 
 
 def forecast_digest(row) -> str:
-    return hashlib.sha256(canonical({key: row[key] for key in FORECAST_FIELDS}).encode()).hexdigest()
+    fields = FORECAST_FIELDS if row["integrity_version"] == VERSION else PREVIOUS_FORECAST_FIELDS
+    return hashlib.sha256(canonical({key: row[key] for key in fields}).encode()).hexdigest()
 
 
 def resolution_digest(row) -> str:
-    payload = {key: row[key] for key in (*FORECAST_FIELDS, *RESOLUTION_FIELDS)}
+    fields = FORECAST_FIELDS if row["integrity_version"] == VERSION else PREVIOUS_FORECAST_FIELDS
+    payload = {key: row[key] for key in (*fields, *RESOLUTION_FIELDS)}
     payload["observation_sha256"] = row["observation_sha256"]
     return hashlib.sha256(canonical(payload).encode()).hexdigest()
 
@@ -153,8 +158,11 @@ def valid_observation(row) -> bool:
         version_policy = (row["integrity_version"], row["horizon_policy"])
         if version_policy not in {
             (LEGACY_VERSION, LEGACY_POLICY),
+            (PREVIOUS_VERSION, PREVIOUS_POLICY),
             (VERSION, POLICY),
         }:
+            return False
+        if row["integrity_version"] == VERSION and row["anchor_version"] != ANCHOR_VERSION:
             return False
         observed = utc_timestamp(row["observed_at"])
         due = utc_timestamp(row["available_at"])

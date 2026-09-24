@@ -25,11 +25,14 @@ import numpy as np
 import pandas as pd
 
 from .historical_replay import validate_historical_replay
+from .operational_target import TARGET_VERSION
+from .net_expectation import TradingCostPolicy
 from ..services.directional_collection import HORIZON_MINUTES
 from ..services.model_observations import canonical
 
 
 HORIZON_MODEL_CONTRACT = "REGULARIZED_HORIZON_FIRST_PASSAGE_V1"
+MODEL_FEATURE_VERSION = "OPERATIONAL_TECHNICAL_FEATURES_V2"
 TARGET_CLASSES = ("TP_FIRST", "SL_FIRST", "TIMEOUT")
 PROFESSIONAL_MINIMUM_SAMPLES = 300
 
@@ -63,17 +66,30 @@ class HorizonSample:
     features: tuple[float, ...]
     outcome: str
     cut_id: str = ""
+    eligible_at_emission: bool = False
+    target_version: str = TARGET_VERSION
+    net_pnl_per_share: float | None = None
+    feature_version: str = "UNVERSIONED"
+    available_features: tuple[str, ...] = ()
+    # Gross realized loss divided by the frozen stop distance. A gap-open stop
+    # can exceed 1.0; this is label evidence, never a live model feature.
+    sl_loss_multiple: float | None = None
+    sl_exit_source: str | None = None
+    entry_side: str = ""
+
+
+class FeatureContractMismatch(ValueError):
+    """Train/live feature schema or point-in-time availability diverged."""
 
 
 NUMERIC_FEATURES = (
     "last_price", "atr_to_price", "price_vs_vwap_pct", "adx",
     "stochastic_k", "stochastic_d", "volume_ratio", "operation_probability",
-    "heuristic_up", "heuristic_down", "bb_position", "ema9_distance_atr",
+    "bb_position", "ema9_distance_atr",
     "ema21_distance_atr", "ema50_distance_atr", "ema200_distance_atr",
     "macd_5m_atr", "macd_histogram_5m_atr", "macd_daily_atr",
     "support_distance_atr", "resistance_distance_atr", "weekly_span_atr",
-    "fundamental_score", "chart_pattern_impact", "exposure_factor",
-    "cross_correlation", "cross_ratio_deviation_pct", "cross_applied_impact",
+    "chart_pattern_impact", "exposure_factor",
     "horizon_up", "horizon_range", "horizon_down", "horizon_atr_to_price",
     "bullish_distance_atr", "bearish_distance_atr", "expected_range_atr",
     "operational_reward_atr", "operational_risk_atr",
@@ -82,7 +98,7 @@ NUMERIC_FEATURES = (
 CATEGORICAL_FEATURES = {
     "market_regime": ("TREND", "RANGE", "TRANSITION", "NO_TRADE", "UNKNOWN"),
     "macro_permission": ("LONG_ONLY", "SHORT_ONLY", "BOTH_REDUCED", "NO_TRADE", "UNKNOWN"),
-    "signal": ("BUY", "SELL", "WATCH_BUY", "WATCH_SELL", "NEUTRAL", "UNKNOWN"),
+    "signal": ("BUY", "SELL", "WATCH_BUY", "WATCH_SELL", "HOLD_LONG", "HOLD_SHORT", "NEUTRAL", "UNKNOWN"),
     "weekly_trend": ("STRONG_BULLISH", "BULLISH", "NEUTRAL", "BEARISH", "STRONG_BEARISH", "UNKNOWN"),
     "daily_trend": ("STRONG_BULLISH", "BULLISH", "NEUTRAL", "BEARISH", "STRONG_BEARISH", "UNKNOWN"),
     "monthly_trend": ("STRONG_BULLISH", "BULLISH", "NEUTRAL", "BEARISH", "STRONG_BEARISH", "UNKNOWN"),
@@ -90,7 +106,7 @@ CATEGORICAL_FEATURES = {
 
 BOOLEAN_FEATURES = (
     "above_vwap", "volume_confirmed", "range_market", "macro_trending",
-    "risk_veto", "fundamental_risk_veto", "activation_trigger_met",
+    "risk_veto", "activation_trigger_met",
     "chart_pattern_veto", "tactical_short",
 )
 
@@ -134,11 +150,9 @@ def feature_vector(cut: Mapping, horizon: Mapping) -> tuple[float, ...]:
     """Extract only information frozen at emission; never inspect outcomes."""
 
     snapshot = cut.get("feature_snapshot") or {}
-    features = snapshot.get("features") or {}
-    prediction = horizon.get("prediction") or {}
+    features = snapshot.get("model_features") or snapshot.get("features") or {}
+    prediction = horizon.get("model_prediction") or horizon.get("prediction") or {}
     contract = horizon.get("operational_contract") or {}
-    cross = features.get("cross_asset_context") or {}
-    ratio = cross.get("ratio") or {}
     price = _number(features.get("last_price"))
     atr = _number(features.get("atr_5m"))
     bb_low = _number(features.get("bollinger_lower"))
@@ -164,8 +178,6 @@ def feature_vector(cut: Mapping, horizon: Mapping) -> tuple[float, ...]:
         "stochastic_d": _number(features.get("stochastic_d")),
         "volume_ratio": _number(features.get("volume_ratio")),
         "operation_probability": _number(features.get("operation_probability")),
-        "heuristic_up": _number(features.get("probability_up")),
-        "heuristic_down": _number(features.get("probability_down")),
         "bb_position": bb_position,
         "ema9_distance_atr": _normalized_distance(features.get("ema9"), price, atr),
         "ema21_distance_atr": _normalized_distance(features.get("ema21"), price, atr),
@@ -179,12 +191,8 @@ def feature_vector(cut: Mapping, horizon: Mapping) -> tuple[float, ...]:
         "weekly_span_atr": _safe_div(
             _number(features.get("weekly_resistance")) - _number(features.get("weekly_support")), atr
         ),
-        "fundamental_score": _number(features.get("fundamental_score")),
         "chart_pattern_impact": _number(features.get("chart_pattern_impact")),
         "exposure_factor": _number(features.get("exposure_factor")),
-        "cross_correlation": _number(cross.get("correlation")),
-        "cross_ratio_deviation_pct": _number(ratio.get("deviation_pct")),
-        "cross_applied_impact": _number(cross.get("applied_impact")),
         "horizon_up": _number(prediction.get("probability_up")),
         "horizon_range": _number(prediction.get("probability_range")),
         "horizon_down": _number(prediction.get("probability_down")),
@@ -198,9 +206,18 @@ def feature_vector(cut: Mapping, horizon: Mapping) -> tuple[float, ...]:
         "operational_risk_atr": _safe_div(entry - stop, horizon_atr),
     }
     values = [numeric[name] for name in NUMERIC_FEATURES]
-    values.extend(1.0 if bool(features.get(name)) else 0.0 for name in BOOLEAN_FEATURES)
+    for name in BOOLEAN_FEATURES:
+        value = features.get(name)
+        values.append(
+            np.nan if value is None and snapshot.get("model_feature_version") == MODEL_FEATURE_VERSION
+            else 1.0 if bool(value) else 0.0
+        )
     for name, categories in CATEGORICAL_FEATURES.items():
         current = _category(features.get(name))
+        if snapshot.get("model_feature_version") == MODEL_FEATURE_VERSION and (
+                current == "UNKNOWN" or current not in categories):
+            values.extend(np.nan for _ in categories)
+            continue
         if current not in categories:
             current = "UNKNOWN"
         values.extend(1.0 if current == category else 0.0 for category in categories)
@@ -209,18 +226,69 @@ def feature_vector(cut: Mapping, horizon: Mapping) -> tuple[float, ...]:
     return tuple(float(value) for value in values)
 
 
-def horizon_samples(replay: Mapping, horizon_label: str) -> tuple[HorizonSample, ...]:
-    """Build resolved, point-in-time samples for exactly one horizon."""
+def model_feature_contract(cut: Mapping, horizon: Mapping) -> dict:
+    """Version and point-in-time availability of the actual model vector."""
+    snapshot = cut.get("feature_snapshot") or {}
+    if (snapshot.get("model_feature_version") == MODEL_FEATURE_VERSION
+            and (snapshot.get("model_features") or snapshot.get("features") or {}).get("market_regime")
+            not in CATEGORICAL_FEATURES["market_regime"]):
+        raise FeatureContractMismatch("market_regime no está codificado como TREND/RANGE/TRANSITION/NO_TRADE.")
+    vector = feature_vector(cut, horizon)
+    return {
+        "version": snapshot.get("model_feature_version") or "UNVERSIONED",
+        "available_features": [
+            name for name, value in zip(FEATURE_NAMES, vector) if math.isfinite(value)
+        ],
+        "schema_sha256": _sha(list(FEATURE_NAMES)),
+    }
+
+
+def _net_replay_pnl(contract: Mapping, result: Mapping, cost_rate: float) -> float | None:
+    """Simulated round-trip P&L per share, including both sides' costs."""
+    try:
+        entry, exit_price = float(contract["entry_price"]), float(result["exit_price"])
+        side = contract["side"]
+        if (side not in {"LONG", "SHORT"} or not math.isfinite(entry)
+                or not math.isfinite(exit_price) or min(entry, exit_price) <= 0):
+            return None
+        gross = exit_price - entry if side == "LONG" else entry - exit_price
+        return gross - cost_rate * (entry + exit_price)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _observed_stop_loss_multiple(contract: Mapping, result: Mapping) -> float | None:
+    if result.get("outcome") != "SL_FIRST":
+        return None
+    try:
+        entry = float(contract["entry_price"])
+        stop = float(contract["stop_loss"])
+        exit_price = float(result["exit_price"])
+        side = contract["side"]
+        risk = entry - stop if side == "LONG" else stop - entry
+        realized_loss = entry - exit_price if side == "LONG" else exit_price - entry
+        if (side not in {"LONG", "SHORT"} or not all(map(math.isfinite, (entry, stop, exit_price)))
+                or risk <= 0 or realized_loss <= 0):
+            return None
+        return realized_loss / risk
+    except (KeyError, TypeError, ValueError, OverflowError, ZeroDivisionError):
+        return None
+
+
+def _replay_labeled_samples(replay: Mapping, horizon_label: str) -> tuple[HorizonSample, ...]:
+    """All resolved hypothetical barriers; eligibility is frozen at emission."""
 
     validate_historical_replay(dict(replay))
     if horizon_label not in HORIZON_MINUTES:
         raise ValueError(f"Horizonte desconocido: {horizon_label}.")
+    cost_rate = TradingCostPolicy().rate_per_side
     rows = []
     for cut in replay.get("observations", ()):
         matches = [row for row in cut.get("horizons", ()) if row.get("label") == horizon_label]
         if len(matches) != 1:
             raise ValueError("Cada corte debe tener exactamente un contrato por horizonte.")
         horizon = matches[0]
+        contract = horizon.get("operational_contract") or {}
         result = horizon.get("operational_result") or {}
         outcome = result.get("outcome")
         available = result.get("exit_at")
@@ -232,17 +300,85 @@ def horizon_samples(replay: Mapping, horizon_label: str) -> tuple[HorizonSample,
             raise ValueError("Timestamps del replay deben ser timezone-aware.")
         if known < observed:
             raise ValueError("Una etiqueta no puede conocerse antes de la predicción.")
+        net_pnl = _net_replay_pnl(contract, result, cost_rate)
+        sl_multiple = _observed_stop_loss_multiple(contract, result)
+        # Missing/invalid entry or exit cannot become an executable training
+        # sample even if a historical artifact marked its trigger as true.
+        eligible = (contract.get("eligible_at_emission") is True and net_pnl is not None
+                    and (outcome != "SL_FIRST" or sl_multiple is not None))
+        feature_contract = model_feature_contract(cut, horizon)
+        declared = horizon.get("model_feature_contract")
+        if eligible and (declared != feature_contract
+                         or feature_contract["version"] != MODEL_FEATURE_VERSION):
+            raise FeatureContractMismatch("Paridad de features del replay inválida o no versionada.")
         rows.append(HorizonSample(
             observed_at=observed.tz_convert("UTC").isoformat(),
             label_available_at=known.tz_convert("UTC").isoformat(),
             features=feature_vector(cut, horizon),
             outcome=str(outcome),
             cut_id=str(cut.get("cut_id") or ""),
+            eligible_at_emission=eligible,
+            target_version=str(contract.get("version") or "UNKNOWN"),
+            net_pnl_per_share=net_pnl if eligible else None,
+            feature_version=feature_contract["version"],
+            available_features=tuple(feature_contract["available_features"]),
+            sl_loss_multiple=sl_multiple if eligible else None,
+            sl_exit_source=str(result.get("exit_source") or "") if eligible and outcome == "SL_FIRST" else None,
+            entry_side=str(contract.get("side") or ""),
         ))
     rows.sort(key=lambda item: item.observed_at)
     if len({row.observed_at for row in rows}) != len(rows):
         raise ValueError("Cortes duplicados en un horizonte.")
     return tuple(rows)
+
+
+def horizon_samples(replay: Mapping, horizon_label: str) -> tuple[HorizonSample, ...]:
+    """Only authorized, realizable entries from the current target version."""
+    return tuple(
+        row for row in _replay_labeled_samples(replay, horizon_label)
+        if (row.eligible_at_emission and row.target_version == TARGET_VERSION
+            and row.feature_version == MODEL_FEATURE_VERSION)
+    )
+
+
+def replay_population_report(replay: Mapping, horizon_label: str) -> dict:
+    """Keep hypothetical barrier frequencies separate from executable outcomes."""
+    hypothetical = _replay_labeled_samples(replay, horizon_label)
+    eligible = tuple(row for row in hypothetical if row.eligible_at_emission)
+    current = tuple(
+        row for row in eligible
+        if row.target_version == TARGET_VERSION and row.feature_version == MODEL_FEATURE_VERSION
+    )
+    profits = [row.net_pnl_per_share for row in eligible]
+    class_performance = {
+        name: {
+            "n": sum(row.outcome == name for row in eligible),
+            "net_wins": sum(
+                row.outcome == name and row.net_pnl_per_share > 0 for row in eligible
+            ),
+        }
+        for name in TARGET_CLASSES
+    }
+    return {
+        "barrier_hypotheses": {
+            "resolved_n": len(hypothetical),
+            "class_counts": _class_counts(hypothetical),
+            "meaning": "Resultado de barreras hipotéticas; no mide entradas ejecutables.",
+        },
+        "executable_entries": {
+            "n": len(eligible),
+            "class_hits": _class_counts(eligible),
+            "class_performance": class_performance,
+            "net_wins": sum(value > 0 for value in profits),
+            "net_expectancy_per_share": (
+                round(sum(profits) / len(profits), 8) if profits else None
+            ),
+            "cost_rate_per_side": TradingCostPolicy().rate_per_side,
+            "meaning": "Entrada autorizada en emisión; P&L simulado sin fill real.",
+        },
+        "trainable_current_target_n": len(current),
+        "excluded_legacy_target_n": len(eligible) - len(current),
+    }
 
 
 def _class_counts(samples: Sequence[HorizonSample]) -> dict[str, int]:
@@ -353,7 +489,7 @@ def _rejection(horizon_label, samples, config, status, reason, split=None, purge
     payload = {
         "horizon": horizon_label,
         "horizon_minutes": HORIZON_MINUTES[horizon_label],
-        "target": "TP_FIRST_SL_FIRST_TIMEOUT_V1",
+        "target": TARGET_VERSION,
         "classes": list(TARGET_CLASSES),
         "score_semantics": "NO_SCORE_MODEL_NOT_TRAINED",
         "status": status,
@@ -384,9 +520,21 @@ def train_horizon_samples(
     config.validate()
     if horizon_label not in HORIZON_MINUTES:
         raise ValueError(f"Horizonte desconocido: {horizon_label}.")
-    samples = tuple(sorted(samples, key=lambda item: item.observed_at))
+    # A resolved hypothetical barrier is not a realizable trade.  Apply the
+    # admission gate even for direct callers, before fitting or splitting.
+    samples = tuple(sorted(
+        (row for row in samples if row.eligible_at_emission and row.target_version == TARGET_VERSION),
+        key=lambda item: item.observed_at,
+    ))
     if any(len(row.features) != len(FEATURE_NAMES) for row in samples):
         raise ValueError("Longitud de features incompatible con el contrato.")
+    if samples and (any(row.feature_version != MODEL_FEATURE_VERSION for row in samples)
+                    or any(row.available_features != tuple(FEATURE_NAMES) for row in samples)
+                    or any(row.available_features != tuple(
+                        name for name, value in zip(FEATURE_NAMES, row.features)
+                        if math.isfinite(value)
+                    ) for row in samples)):
+        raise FeatureContractMismatch("Features train/replay incompatibles: versión o cobertura histórica incompleta.")
     if any(row.outcome not in TARGET_CLASSES for row in samples):
         raise ValueError("Clase operacional desconocida.")
     if len(samples) < config.minimum_samples:
@@ -460,7 +608,7 @@ def train_horizon_samples(
     payload = {
         "horizon": horizon_label,
         "horizon_minutes": HORIZON_MINUTES[horizon_label],
-        "target": "TP_FIRST_SL_FIRST_TIMEOUT_V1",
+        "target": TARGET_VERSION,
         "classes": list(TARGET_CLASSES),
         "score_semantics": "REGULARIZED_SCORE_UNCALIBRATED",
         "status": status,
@@ -474,6 +622,8 @@ def train_horizon_samples(
         "minimum_samples_required": config.minimum_samples,
         "professional_minimum_samples": PROFESSIONAL_MINIMUM_SAMPLES,
         "feature_names": list(FEATURE_NAMES),
+        "feature_version": MODEL_FEATURE_VERSION,
+        "available_features": list(samples[0].available_features),
         "feature_schema_sha256": _sha(list(FEATURE_NAMES)),
         "selection": {
             "source": "CALIBRATION_ONLY",
@@ -509,10 +659,23 @@ def train_replay_horizon_models(replay: Mapping, config: TrainingConfig | None =
     validate_historical_replay(dict(replay))
     config = config or TrainingConfig()
     config.validate()
-    models = [
-        train_horizon_samples(label, horizon_samples(replay, label), config)
-        for label in HORIZON_MINUTES
-    ]
+    models = []
+    for label in HORIZON_MINUTES:
+        population = replay_population_report(replay, label)
+        model = train_horizon_samples(label, horizon_samples(replay, label), config)
+        model.pop("model_sha256")
+        model["population"] = population
+        if population["trainable_current_target_n"] < config.minimum_samples:
+            model["status"] = "EVIDENCIA_INSUFICIENTE"
+            model["reason"] = (
+                "Sin evidencia de entradas ejecutables suficiente: "
+                f"{population['trainable_current_target_n']}/{config.minimum_samples} "
+                "muestras elegibles del contrato vigente. Las barreras hipotéticas no entrenan el modelo."
+            )
+            model["promotable"] = False
+            model["model"] = None
+        model["model_sha256"] = _sha(model)
+        models.append(model)
     deterministic = {
         "contract": HORIZON_MODEL_CONTRACT,
         "trainer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -520,7 +683,7 @@ def train_replay_horizon_models(replay: Mapping, config: TrainingConfig | None =
         "symbol": str(replay.get("symbol") or "").upper(),
         "source_replay_id": replay.get("replay_id"),
         "source_replay_sha256": replay.get("artifact_sha256"),
-        "target": "TP_FIRST_SL_FIRST_TIMEOUT_V1",
+        "target": TARGET_VERSION,
         "horizon_isolation": "ONE_MODEL_PER_SYMBOL_AND_HORIZON",
         "live_oos_policy": "HISTORICAL_TRAINING_NEVER_COUNTS_AS_LIVE_OOS",
         "configuration": _clean_numbers({
@@ -553,7 +716,7 @@ def validate_horizon_model_artifact(payload: Mapping) -> bool:
         unsigned = {key: value for key, value in row.items() if key != "model_sha256"}
         if row.get("model_sha256") != _sha(unsigned):
             raise ValueError(f"Firma de modelo inválida: {row.get('horizon')}.")
-        if row.get("target") != "TP_FIRST_SL_FIRST_TIMEOUT_V1":
+        if row.get("target") != TARGET_VERSION:
             raise ValueError("Objetivo operacional inválido.")
         if row.get("model") is not None and row.get("score_semantics") != "REGULARIZED_SCORE_UNCALIBRATED":
             raise ValueError("Un modelo entrenado debe declarar scores no calibrados.")
@@ -579,6 +742,12 @@ def predict_uncalibrated_scores(model_record: Mapping, features: Sequence[float]
         raise ValueError("El modelo no está aprobado para inferencia operativa.")
     if len(features) != len(FEATURE_NAMES):
         raise ValueError("Vector de inferencia incompatible.")
+    actual_available = [
+        name for name, value in zip(FEATURE_NAMES, features) if math.isfinite(float(value))
+    ]
+    if (model_record.get("feature_version") != MODEL_FEATURE_VERSION
+            or model_record.get("available_features") != actual_available):
+        raise FeatureContractMismatch("Features train/live incompatibles en modelo no calibrado.")
     model = model_record["model"]
     medians = np.asarray(model["imputation_medians"], dtype=float)
     values = np.asarray(features, dtype=float)

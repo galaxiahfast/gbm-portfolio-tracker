@@ -412,12 +412,12 @@ def _system_decision_story(decision, styles):
         ["Acción", "Horizonte", "Entrada", "Stop", "Objetivo"],
         [
             decision.action,
-            decision.horizon,
+            "N/D" if decision.horizon == "Sin horizonte validado" else decision.horizon,
             "N/D" if decision.entry_low is None else f"${decision.entry_low:.2f}-${decision.entry_high:.2f}",
             "N/D" if decision.stop_loss is None else f"${decision.stop_loss:.2f}",
             "N/D" if decision.take_profit is None else f"${decision.take_profit:.2f}",
         ],
-        ["Acciones nuevas", "Riesgo monetario", "EV neta", "R:R neto", "Muestras"],
+        ["Acciones nuevas", "Riesgo monetario", "EV realista", "R:R", "Muestras"],
         [
             str(decision.position_size),
             f"${decision.monetary_risk:.2f}",
@@ -430,6 +430,18 @@ def _system_decision_story(decision, styles):
         Paragraph("DECISIÓN DEL SISTEMA", styles["Section"]),
         Paragraph(_safe_text(decision.explanation), styles["BodySmall"]),
         _table(rows, [34.8 * mm] * 5),
+        _table(
+            [
+                ["EV neta teórica / acción", "EV neta observada/realista / acción"],
+                [
+                    "N/D" if decision.theoretical_expected_value_per_share is None else
+                    f"${decision.theoretical_expected_value_per_share:+.2f}",
+                    "N/D" if decision.observed_expected_value_per_share is None else
+                    f"${decision.observed_expected_value_per_share:+.2f}",
+                ],
+            ],
+            [87 * mm, 87 * mm],
+        ),
         Paragraph(
             _safe_text(
                 f"Capital ${decision.total_capital:.2f}; efectivo ${decision.cash_available:.2f}; "
@@ -440,8 +452,12 @@ def _system_decision_story(decision, styles):
                 f"Brier operativo OOS {value(decision.operational_brier, '.4f')}; "
                 f"baseline {value(decision.operational_baseline_brier, '.4f')}; "
                 f"costes por lado {value(decision.cost_rate_per_side, '.2%')}; "
-                f"estado {decision.calibration_status}. El timeout se valora al stop; "
-                "los gaps pueden agravar la pérdida. El Brier de zonas no interviene. "
+                f"{decision.observed_sl_samples} stops observados en desarrollo; "
+                f"fill supuesto {value(decision.fill_probability, '.0%')}; "
+                f"spread supuesto {value(decision.spread_bps, '.1f')} pb; "
+                f"exposición aplicada {decision.exposure_factor_applied:.0%}; "
+                f"estado {decision.calibration_status}. El timeout se estresa a la peor salida SL observada; "
+                "un gap futuro puede ser peor. El Brier de zonas no interviene. "
                 "Recomendacion informativa; ejecucion manual."
             ),
             styles["BodySmall"],
@@ -658,6 +674,7 @@ def _json_mapping(value: object) -> dict[str, object]:
 def _calibration_story(
     context: Mapping[str, object] | None,
     styles,
+    symbol: str,
 ) -> list[object]:  # type: ignore[no-untyped-def]
     story: list[object] = [
         Paragraph("Calibración y backtesting", styles["Section"]),
@@ -674,13 +691,14 @@ def _calibration_story(
     ]
     payload = dict(context or {})
     online = _json_mapping(payload.get("online_stats", {}))
+    coverage = _json_mapping(payload.get("operational_coverage", {}))
     story.extend(
         [
             Spacer(1, 7),
             Paragraph("Realimentación progresiva", styles["ChartTitle"]),
             _table(
                 [
-                    ["Observaciones resueltas", "Acierto agregado", "Brier agregado", "Uso operativo"],
+                    ["Filas direccionales", "Acierto por fila", "Brier por fila", "Uso operativo"],
                     [
                         int(online.get("resolved", 0) or 0),
                         f"{float(online.get('accuracy', 0) or 0):.1%}",
@@ -692,14 +710,35 @@ def _calibration_story(
             ),
         ]
     )
+    if coverage:
+        story.extend([
+            Spacer(1, 7),
+            Paragraph("Cobertura operativa por evento independiente", styles["ChartTitle"]),
+            _table([
+                ["Eventos resueltos", "TP primero", "SL primero", "Resoluciones/horizonte"],
+                [int(coverage.get("resolved_events", 0) or 0),
+                 int(coverage.get("tp_first_events", 0) or 0),
+                 int(coverage.get("sl_first_events", 0) or 0),
+                 int(coverage.get("horizon_resolutions", 0) or 0)],
+            ], [43.5 * mm] * 4),
+            Paragraph("Horizontes con la misma entrada, stop y objetivo representan un solo evento; "
+                      "sus resoluciones no son aciertos independientes.", styles["BodySmall"]),
+        ])
     run = _json_mapping(payload.get("backtest_run", {}))
+    if run:
+        try:
+            listed_symbols = json.loads(str(run.get("symbols_json", "[]")))
+        except (TypeError, ValueError):
+            listed_symbols = []
+        if symbol not in listed_symbols:
+            run = {}
     if not run:
         story.extend(
             [
                 Spacer(1, 8),
                 Paragraph(
-                    "Aún no existe una ejecución histórica registrada. El PDF maestro conserva "
-                    "esta ausencia explícita para evitar presentar métricas inventadas.",
+                    f"Aún no existe una ejecución histórica registrada para {symbol}. "
+                    "El PDF maestro conserva esta ausencia explícita para evitar presentar métricas inventadas.",
                     styles["BodySmall"],
                 ),
             ]
@@ -708,10 +747,19 @@ def _calibration_story(
 
     parameters = _json_mapping(run.get("parameters_json", {}))
     result_payload = _json_mapping(run.get("payload_json", {}))
-    aggregate = _json_mapping(result_payload.get("aggregate", {}))
     raw_payload = str(run.get("payload_json", ""))
     stored_hash = str(run.get("payload_sha256", ""))
     hash_valid = bool(raw_payload) and hashlib.sha256(raw_payload.encode("utf-8")).hexdigest() == stored_hash
+    if not hash_valid:
+        story.append(Paragraph("Backtest excluido: integridad SHA-256 inválida.", styles["BodySmall"]))
+        return story
+    results = result_payload.get("results", [])
+    selected = next((item for item in results if isinstance(item, dict)
+                     and item.get("symbol") == symbol), None) if isinstance(results, list) else None
+    if not selected:
+        story.append(Paragraph("Sin resultado OOS verificable para esta emisora.", styles["BodySmall"]))
+        return story
+    aggregate = _json_mapping(selected.get("validation", {}))
     story.extend(
         [
             Spacer(1, 9),
@@ -762,15 +810,14 @@ def _calibration_story(
             Paragraph(
                 _safe_text(
                     f"Dataset SHA-256: {run.get('dataset_sha256', '-')}. "
-                    f"Resultado agregado: {result_payload.get('aggregate_decision', run.get('status', '-'))}."
+                    f"Resultado {symbol}: {selected.get('decision', run.get('status', '-'))}."
                 ),
                 styles["BodySmall"],
             ),
         ]
     )
-    results = result_payload.get("results", [])
-    if isinstance(results, list) and results:
-        benchmark = _json_mapping(_json_mapping(results[0]).get("benchmarks", {}))
+    if selected:
+        benchmark = _json_mapping(selected.get("benchmarks", {}))
         if benchmark:
             story.extend(
                 [
@@ -915,7 +962,7 @@ def _build_report(
     if include_calibration:
         if include_executive or include_technical:
             story.append(PageBreak())
-        story.extend(_calibration_story(calibration_context, styles))
+        story.extend(_calibration_story(calibration_context, styles, analysis.symbol))
     document.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
     return buffer.getvalue()
 

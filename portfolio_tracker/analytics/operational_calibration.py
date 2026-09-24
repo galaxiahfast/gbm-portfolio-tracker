@@ -17,6 +17,7 @@ from .horizon_models import (
     _sha,
     _softmax,
 )
+from .metric_uncertainty import score_intervals
 
 
 DEFAULT_TEMPERATURE_GRID = (0.5, 0.67, 0.8, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0)
@@ -55,9 +56,13 @@ def _labels(values, expected: int) -> np.ndarray:
 
 
 def _metrics(probabilities, labels):
+    intervals = score_intervals(probabilities, labels)
     return {
         "brier": _brier(probabilities, labels),
         "log_loss": _log_loss(probabilities, labels),
+        "confidence_intervals": {
+            name: intervals[name] for name in ("brier", "log_loss")
+        },
     }
 
 
@@ -87,17 +92,30 @@ def select_and_validate_temperature(
         raise ValueError("El baseline debe corresponder a las mismas observaciones.")
     y_fit = _labels(fit_labels, len(fit))
     y_validation = _labels(validation_labels, len(validation))
+    fit_counts = {
+        name: int(sum(y_fit == index)) for index, name in enumerate(TARGET_CLASSES)
+    }
+    validation_counts = {
+        name: int(sum(y_validation == index)) for index, name in enumerate(TARGET_CLASSES)
+    }
     if (len(fit) < minimum_fit or len(validation) < minimum_validation
-            or min(np.bincount(y_fit, minlength=len(TARGET_CLASSES))) < minimum_per_class):
+            or min(fit_counts.values()) < minimum_per_class
+            or min(validation_counts.values()) < minimum_per_class):
         return {
-            "status": "INSUFFICIENT_OOF_CALIBRATION",
+            "status": "INSUFFICIENT_OOF_CLASS_SUPPORT" if (
+                min(fit_counts.values()) < minimum_per_class
+                or min(validation_counts.values()) < minimum_per_class
+            ) else "INSUFFICIENT_OOF_CALIBRATION",
             "approved": False,
+            "reason": (
+                f"Cada clase TP_FIRST/SL_FIRST/TIMEOUT necesita al menos "
+                f"{minimum_per_class} casos tanto en ajuste como en validación."
+            ),
             "temperature": None,
             "fit_samples": len(fit),
             "validation_samples": len(validation),
-            "fit_class_counts": {
-                name: int(sum(y_fit == index)) for index, name in enumerate(TARGET_CLASSES)
-            },
+            "fit_class_counts": fit_counts,
+            "validation_class_counts": validation_counts,
             "candidates": [],
             "validation_metrics": None,
         }
@@ -133,9 +151,8 @@ def select_and_validate_temperature(
         "temperature": selected["temperature"],
         "fit_samples": len(fit),
         "validation_samples": len(validation),
-        "fit_class_counts": {
-            name: int(sum(y_fit == index)) for index, name in enumerate(TARGET_CLASSES)
-        },
+        "fit_class_counts": fit_counts,
+        "validation_class_counts": validation_counts,
         "selection_source": "EARLIER_OUTER_OOF_ONLY",
         "validation_source": "LATER_OUTER_OOF_ONLY",
         "candidates": results,
@@ -147,7 +164,9 @@ def select_and_validate_temperature(
     }
 
 
-def predict_calibrated_scores(model_record, features) -> dict:
+def predict_calibrated_scores(
+    model_record, features, *, feature_version=None, available_features=None,
+) -> dict:
     """Infer only from a signed, approved and calibrated horizon result."""
 
     if model_record.get("result_sha256") != _sha({
@@ -160,6 +179,11 @@ def predict_calibrated_scores(model_record, features) -> dict:
             or model_record.get("feature_names") != list(FEATURE_NAMES)
             or model_record.get("feature_schema_sha256") != _sha(list(FEATURE_NAMES))):
         raise ValueError("Modelo calibrado no aprobado o esquema incompatible.")
+    from .horizon_models import FeatureContractMismatch, MODEL_FEATURE_VERSION
+    if (feature_version != MODEL_FEATURE_VERSION
+            or model_record.get("feature_version") != MODEL_FEATURE_VERSION
+            or list(available_features or ()) != model_record.get("available_features")):
+        raise FeatureContractMismatch("Features train/live incompatibles: versión o disponibilidad distinta.")
     model = model_record.get("model") or {}
     calibration = model.get("calibration") or {}
     if calibration.get("method") != "MULTICLASS_TEMPERATURE_SCALING_V1":
@@ -167,6 +191,9 @@ def predict_calibrated_scores(model_record, features) -> dict:
     values = np.asarray(features, dtype=float)
     if values.shape != (len(FEATURE_NAMES),):
         raise ValueError("Vector de features incompatible.")
+    actual_available = [name for name, value in zip(FEATURE_NAMES, values) if math.isfinite(value)]
+    if actual_available != list(available_features or ()):
+        raise FeatureContractMismatch("Features train/live incompatibles: disponibilidad declarada no coincide con el vector.")
     medians = np.asarray(model["imputation_medians"], dtype=float)
     means = np.asarray(model["standardization_means"], dtype=float)
     scales = np.asarray(model["standardization_scales"], dtype=float)

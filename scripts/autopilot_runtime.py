@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import time as time_module
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,10 +134,12 @@ def open_repository(path):
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if required - tables:
             raise ValueError(f"Falta estructura existente: {sorted(required-tables)}. Iniciar/migrar con el flujo habitual.")
-        schema_version = connection.execute(
-            "SELECT COALESCE(MAX(version),0) FROM schema_migrations"
-        ).fetchone()[0]
+        applied_versions = {
+            int(row[0]) for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        schema_version = max(applied_versions, default=0)
         required_version = max(version for version, _ in MIGRATIONS)
+        missing_versions = {version for version, _ in MIGRATIONS} - applied_versions
         checkpoint_columns = {
             "scanned_through", "scan_evidence_sha256", "scan_evidence_count",
             "scan_evidence_json", "checkpoint_updated_at", "checkpoint_sha256",
@@ -146,7 +149,11 @@ def open_repository(path):
                 "PRAGMA table_info(operational_model_outcomes)"
             )
         }
-        if schema_version < required_version or checkpoint_columns - stored_columns:
+        anchor_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(live_model_observations)")
+        }
+        if (missing_versions or checkpoint_columns - stored_columns
+                or "anchor_version" not in anchor_columns):
             raise ValueError(
                 f"Esquema analítico v{schema_version} incompleto; "
                 f"se requiere v{required_version}. Iniciar/migrar con el flujo habitual."
@@ -259,7 +266,8 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
             if not allowed("collect", now_fn(), scheduled):
                 raise ValueError("Terminó la ventana antes de emitir; no se guardan pronósticos tardíos.")
             emitted_at = now_fn()
-            if time(11) <= emitted_at.astimezone(NY).time() < time(11, 20):
+            from portfolio_tracker.analytics.temporal_contract import is_actionable_emission
+            if is_actionable_emission(emitted_at, analysis.source_bar_closed_at):
                 parameters = repository.latest_backtest_parameters(symbol=symbol, engine_version=ENGINE_VERSION) or {
                     "minimum_probability": .55, "stop_atr_multiple": 2.25, "risk_per_trade_pct": 1.,
                 }
@@ -268,6 +276,8 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
                     input_artifacts=input_artifacts,
                 )
                 log.info("%s: corte direccional 11 NY: %s/6 observaciones nuevas; sin duplicados", symbol, saved)
+            else:
+                log.info("%s: corte direccional NO_ACCIONABLE; se conserva solo la predicción de zonas", symbol)
             if not zones_done:
                 # Freeze at actual emission; never pretend a delayed run was 11:00.
                 snapshot = build_zone_snapshot(analysis, now=now_fn())
@@ -278,10 +288,79 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
                     log.warning("%s: recolección incompleta; no se inventan zonas o porcentajes N/D", symbol)
             else:
                 log.info("%s: ya hay seis zonas íntegras de hoy; sin duplicar", symbol)
+            if scheduled:
+                from portfolio_tracker.services.directional_collection import COLLECTION_PROTOCOL
+                from portfolio_tracker.services.model_execution_record import execution_id
+                run_id = execution_id(symbol, day, COLLECTION_PROTOCOL)
+                if repository.live_model_execution_record(run_id) is None:
+                    failed = True
+                    log.warning("ALERTA_CORTE_EN_RIESGO %s %s: faltan observaciones direccionales firmadas", symbol, day)
         except Exception:
             failed = True
             log.exception("%s: error de colección; se continúa con los demás activos", symbol)
     return 1 if failed else 0
+
+
+def retry_scheduled_collection(attempt, log, *, now_fn=clock, sleep_fn=time_module.sleep,
+                               retry_seconds=30):
+    """Retry only during the scheduled NY window; never backdate a missed cut."""
+    while allowed("collect", now_fn(), scheduled=True):
+        try:
+            if attempt() == 0:
+                return 0
+        except (BlockingIOError, PermissionError) as exc:
+            log.warning("ALERTA_CORTE_EN_RIESGO: lock ocupado: %s", exc)
+        except Exception:
+            log.exception("ALERTA_CORTE_EN_RIESGO: fallo transitorio de colección")
+        now = now_fn()
+        if not allowed("collect", now, scheduled=True):
+            break
+        ny = now.astimezone(NY)
+        deadline = datetime.combine(ny.date(), time(11, 20), NY)
+        remaining = (deadline - ny).total_seconds()
+        if remaining <= retry_seconds:
+            break
+        log.warning("Reintento del corte dentro de ventana NY en %s segundos", retry_seconds)
+        sleep_fn(retry_seconds)
+    log.error("ALERTA_CORTE_PERDIDO: colector sin corte completo dentro de 11:00–11:20 NY; "
+              "no se generan predicciones retrospectivas")
+    return 1
+
+
+def audit_recent_missing_cuts(repository, symbols, log, *, now=None, sessions=5):
+    """At boot, alert on absent signed cuts; never create retrospective forecasts."""
+    import pandas as pd
+    from portfolio_tracker.analytics.closed_bars import _calendar
+    from portfolio_tracker.services.directional_collection import SUPPORTED_COLLECTION_PROTOCOLS
+    from portfolio_tracker.services.model_execution_record import execution_id
+
+    now = now or clock()
+    today = pd.Timestamp(now.astimezone(NY).date())
+    schedule = _calendar(today.year - 1, today.year + 1).schedule
+    previous = schedule.index[schedule.index < today][-sessions:]
+    missing = []
+    with repository.database.connect() as connection:
+        first_by_symbol = {
+            symbol: connection.execute(
+                "SELECT MIN(observed_at) FROM live_model_observations WHERE symbol=?", (symbol,)
+            ).fetchone()[0]
+            for symbol in symbols
+        }
+    for symbol in symbols:
+        first = first_by_symbol[symbol]
+        if first is None:
+            continue  # Not yet enrolled; do not allege historical missed cuts.
+        for day in previous:
+            session = day.date().isoformat()
+            if session < str(first)[:10]:
+                continue
+            if not any(repository.live_model_execution_record(
+                execution_id(symbol, session, protocol)
+            ) is not None for protocol in SUPPORTED_COLLECTION_PROTOCOLS):
+                missing.append((symbol, session))
+                log.error("ALERTA_CORTE_PERDIDO %s %s: sin cohorte firmada; "
+                          "catch-up no fabrica pronósticos retrospectivos", symbol, session)
+    return tuple(missing)
 
 
 def resolve(repository, symbols, log, *, catchup=False, now=None, state_dir=None):
@@ -377,12 +456,34 @@ def cli(job):
             log.info("Comprobación sin descargas/escrituras DB. Próximo paso: ejecutar sin --check-only.")
             return 0
         if not permitted:
+            if job == "collect" and args.scheduled:
+                from portfolio_tracker.services.zone_forward import session_bounds
+                ny = now.astimezone(NY)
+                if session_bounds(now) is not None and ny.time() >= time(11, 20):
+                    from portfolio_tracker.services.directional_collection import COLLECTION_PROTOCOL
+                    from portfolio_tracker.services.model_execution_record import execution_id
+                    repository = open_repository(database)
+                    missing = [symbol for symbol in symbols if repository.live_model_execution_record(
+                        execution_id(symbol, ny.date().isoformat(), COLLECTION_PROTOCOL)
+                    ) is None]
+                    if missing:
+                        log.error("ALERTA_CORTE_PERDIDO %s: arranque tras 11:20 NY; "
+                                  "sin predicciones retrospectivas", ",".join(missing))
+                        return 1
             log.info("Sin trabajo: fuera de sesión/ventana NY o festivo.")
             return 0
+        def attempt():
+            with exclusive_job(Path(state_dir) / "jobs.lock"):
+                repository = open_repository(database)
+                return collect(repository, symbols, state_dir, log, scheduled=args.scheduled)
+        if job == "collect" and args.scheduled:
+            return retry_scheduled_collection(attempt, log)
         with exclusive_job(Path(state_dir) / "jobs.lock"):
             repository = open_repository(database)
             if job == "collect":
                 return collect(repository, symbols, state_dir, log, scheduled=args.scheduled)
+            if job == "catchup":
+                audit_recent_missing_cuts(repository, symbols, log, now=now)
             return resolve(repository, symbols, log, catchup=job == "catchup", now=now,
                            state_dir=state_dir)
     except (BlockingIOError, PermissionError) as exc:

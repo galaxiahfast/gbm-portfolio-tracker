@@ -67,6 +67,7 @@ def _analysis(symbol="SMCI", source="2026-09-03T15:00:00Z"):
         probability_up=60.0, probability_down=10.0,
         adx=27.0, volume_ratio=1.35, weekly_trend="Alcista",
         macro_permission="LONG_ONLY",
+        market_regime="TREND",
         cross_asset_context={"peer_symbol": "NVDA", "correlation": 0.72},
         intraday_indicators=indicators,
         execution_levels=SimpleNamespace(
@@ -207,9 +208,10 @@ def test_six_forecasts_share_signed_execution_and_replay_features(repository):
     assert all(item["resolution_status"] == "PENDING" for item in record["predictions"])
 
     retry = datetime(2026, 9, 3, 15, 5, 10, tzinfo=timezone.utc)
-    assert record_fixed_directional(
-        repository, _analysis(source="2026-09-03T15:05:00Z"), {}, retry,
-    ) == 0
+    with pytest.raises(ValueError, match="Corte no accionable"):
+        record_fixed_directional(
+            repository, _analysis(source="2026-09-03T15:05:00Z"), {}, retry,
+        )
     assert len(_rows(repository)) == 6
     assert repository.cash_balance_usd() == cash_before
     with repository.database.connect() as connection:
@@ -225,7 +227,7 @@ def test_exact_outcome_is_attached_to_same_verified_execution(repository):
     candle = pd.DataFrame(
         {"Open": [100.0], "High": [102.0], "Low": [99.0],
          "Close": [101.5], "Volume": [1500.0]},
-        index=pd.DatetimeIndex(["2026-09-03T15:55:00Z"]),
+        index=pd.DatetimeIndex(["2026-09-03T16:00:00Z"]),
     )
     assert repository.resolve_live_model_observations(
         symbol="SMCI", current_as_of=datetime(2026, 9, 3, 16, 5, tzinfo=timezone.utc),
@@ -236,7 +238,7 @@ def test_exact_outcome_is_attached_to_same_verified_execution(repository):
     resolved = next(item for item in record["predictions"] if item["horizon_minutes"] == 60)
     assert resolved["resolution_status"] == "RESOLVED"
     assert float(resolved["outcome_price"]) == 101.5
-    assert resolved["outcome_bar_at"] == "2026-09-03T16:00:00+00:00"
+    assert resolved["outcome_bar_at"] == "2026-09-03T16:05:00+00:00"
     assert resolved["outcome_source"] == "yfinance:5m:raw-close"
     assert resolved["resolution_sha256"]
     assert sum(item["resolution_status"] == "PENDING" for item in record["predictions"]) == 5
@@ -353,6 +355,15 @@ def test_operational_tp_first_resolves_early_and_is_joined_to_execution(reposito
     assert {item["exit_at"] for item in results} == {"2026-09-03T15:10:00+00:00"}
     assert all(item["outcome_sha256"] for item in results)
     assert repository.verify_operational_model_outcomes() == (6, ())
+    coverage = repository.operational_event_coverage("SMCI")
+    assert coverage["horizon_resolutions"] == 6
+    assert coverage["independent_events"] == 1
+    assert coverage["resolved_events"] == 1
+    assert coverage["tp_first_events"] == 1
+    assert coverage["tp_first_rate"] == 1.0
+    per_horizon = repository.operational_validation_counts("SMCI")
+    assert all(item["resolved"] == 1 for item in per_horizon.values())
+    assert all(item["eligible"] <= item["resolved"] for item in per_horizon.values())
 
 
 def test_operational_timeout_requires_exact_horizon_close(repository):

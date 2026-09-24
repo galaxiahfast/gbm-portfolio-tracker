@@ -4,18 +4,36 @@ from __future__ import annotations
 import streamlit as st
 
 
+def render_validation_banner(status, slot=None):
+    """Keep the statistical caveat visible above the predictor tabs."""
+    target = slot if slot is not None else st
+    if status["preliminary"]:
+        target.warning(str(status["banner"]), icon=":material/shield:")
+    else:
+        target.info(str(status["banner"]), icon=":material/verified:")
+
+
 def render_system_decision(decision):
     with st.container(border=True, key="system_decision"):
         st.markdown("### DECISIÓN DEL SISTEMA")
+        if getattr(decision, "recommendation_mode", "CONSERVADOR") == "CONSERVADOR":
+            st.caption("PRELIMINAR · Modo CONSERVADOR: no hay compra autorizada en este corte. "
+                       "Se exigen 300 entradas ejecutables verificadas y un modelo aprobado por horizonte.")
         if decision.action == "ESPERAR":
-            reason = "VETO DE RIESGO" if decision.risk_veto else "GATILLO PENDIENTE"
+            reason = {
+                "VETO_RIESGO": "VETO DE RIESGO",
+                "FALTA_EVIDENCIA": "FALTA DE EVIDENCIA",
+                "CONTRATO_FEATURES": "ERROR DE PARIDAD DE FEATURES",
+                "GATILLO_PENDIENTE": "GATILLO PENDIENTE",
+            }.get(getattr(decision, "waiting_cause", ""),
+                  "VETO DE RIESGO" if decision.risk_veto else "GATILLO PENDIENTE")
             headline = f"ESPERAR AHORA · {reason}"
         else:
-            headline = decision.action
+            headline = decision.action.replace("_", " ")
         message = f"**{headline}**  \n{decision.explanation}"
         if decision.action == "COMPRAR":
             st.success(message, icon=":material/trending_up:")
-        elif decision.action == "VENDER":
+        elif decision.action in {"VENDER", "CONFIRMAR_SALIDA"}:
             st.error(message, icon=":material/trending_down:")
         elif decision.action == "MANTENER":
             st.info(message, icon=":material/pause_circle:")
@@ -38,10 +56,23 @@ def render_system_decision(decision):
             help="La segunda cifra solo es distinta de cero cuando COMPRAR está autorizado.",
         )
         risk.metric(
-            "Riesgo / expectativa neta",
+            "Riesgo máximo estimado / EV realista",
             f"${decision.monetary_risk:,.2f} / "
             + ("N/D" if decision.expected_value_total is None else f"${decision.expected_value_total:+,.2f}"),
-            help=f"Presupuesto máximo de riesgo: ${decision.risk_budget:,.2f}.",
+            help=f"Riesgo dimensionado con la peor salida SL observada. Presupuesto: ${decision.risk_budget:,.2f}.",
+        )
+        observed_column, theoretical_column = st.columns(2, gap="small")
+        observed_column.metric(
+            "EV neta observada/realista · por acción",
+            "N/D" if decision.observed_expected_value_per_share is None
+            else f"${decision.observed_expected_value_per_share:+,.2f}",
+            help="Usa salidas SL observadas en desarrollo, spread, deslizamiento y posibilidad de no ejecución.",
+        )
+        theoretical_column.metric(
+            "EV neta teórica · por acción",
+            "N/D" if decision.theoretical_expected_value_per_share is None
+            else f"${decision.theoretical_expected_value_per_share:+,.2f}",
+            help="Supone ejecución y salida exacta en el stop; solo sirve como referencia.",
         )
         if decision.adjusted_win_probability is None:
             st.caption(
@@ -64,8 +95,12 @@ def render_system_decision(decision):
                 f"Brier operativo OOS {brier} · baseline {baseline} · "
                 f"{decision.validated_sessions} muestras holdout. "
                 f"Costes estimados por lado {decision.cost_rate_per_side:.2%}; "
-                "timeout valorado conservadoramente al stop. "
-                "Un gap puede exceder la pérdida estimada."
+                f"{decision.observed_sl_samples} salidas SL observadas en desarrollo; "
+                f"fill supuesto {decision.fill_probability:.0%}; "
+                f"spread supuesto {decision.spread_bps:.1f} pb. "
+                "Timeout estresado a la peor salida SL observada. "
+                f"{decision.calibration_status}. "
+                "Un gap futuro puede superar incluso la peor pérdida histórica."
             )
         st.markdown("**Condiciones de activación LONG**")
         st.table([

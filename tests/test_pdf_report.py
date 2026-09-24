@@ -112,6 +112,12 @@ def test_master_pdf_adds_audited_calibration_as_third_view() -> None:
                 "maximum_drawdown_pct": 6.2,
             },
             "aggregate_decision": "APROBADO",
+            "results": [{"symbol": "SMCI", "decision": "APROBADO",
+                         "validation": {"trades": 12, "win_rate": 0.58,
+                                        "profit_factor": 1.42, "maximum_drawdown_pct": 6.2},
+                         "benchmarks": {"buy_hold_net_return_pct": 2.0,
+                                        "ema_crossover_net_return_pct": 1.0,
+                                        "bot_excess_vs_buy_hold_pct": 0.5}}],
         },
         sort_keys=True,
     )
@@ -125,6 +131,7 @@ def test_master_pdf_adds_audited_calibration_as_third_view() -> None:
         },
         "backtest_run": {
             "id": 7,
+            "symbols_json": '["SMCI"]',
             "status": "APPROVED",
             "engine_version": "oos-test",
             "parameters_json": json.dumps(
@@ -151,6 +158,41 @@ def test_master_pdf_adds_audited_calibration_as_third_view() -> None:
     assert "VALIDA" in text
     assert "DESACTIVADO" in text
     assert "Umbral adaptativo" not in text
+
+
+def test_master_pdf_filters_backtest_and_benchmark_to_displayed_symbol() -> None:
+    result_payload = json.dumps({"results": [
+        {"symbol": "NVDA", "validation": {"trades": 99, "win_rate": 0.99,
+            "profit_factor": 99, "maximum_drawdown_pct": 1, "net_return_pct": 99},
+         "benchmarks": {"buy_hold_net_return_pct": 99, "ema_crossover_net_return_pct": 99,
+                         "bot_excess_vs_buy_hold_pct": 99}},
+        {"symbol": "SMCI", "validation": {"trades": 12, "win_rate": 0.58,
+            "profit_factor": 1.42, "maximum_drawdown_pct": 6.2, "net_return_pct": 3},
+         "benchmarks": {"buy_hold_net_return_pct": 2, "ema_crossover_net_return_pct": 1,
+                         "bot_excess_vs_buy_hold_pct": 1}},
+    ]}, sort_keys=True)
+    context = {"backtest_run": {"id": 8, "symbols_json": '["NVDA", "SMCI"]',
+        "payload_json": result_payload,
+        "payload_sha256": hashlib.sha256(result_payload.encode()).hexdigest()}}
+    text = "\n".join(page.extract_text() or "" for page in
+                     PdfReader(BytesIO(build_master_report(_analysis(), context))).pages)
+    assert "58.0%" in text
+    assert "+2.00%" in text
+    assert "99.0%" not in text
+    assert "+99.00%" not in text
+
+
+def test_master_pdf_excludes_run_for_other_symbol() -> None:
+    result_payload = json.dumps({"results": [{"symbol": "NVDA",
+        "validation": {"trades": 99, "win_rate": .99},
+        "benchmarks": {"buy_hold_net_return_pct": 99}}]})
+    context = {"backtest_run": {"symbols_json": '["NVDA"]',
+        "payload_json": result_payload,
+        "payload_sha256": hashlib.sha256(result_payload.encode()).hexdigest()}}
+    text = "\n".join(page.extract_text() or "" for page in
+                     PdfReader(BytesIO(build_master_report(_analysis(), context))).pages)
+    assert "Aún no existe una ejecución histórica registrada" in text
+    assert "Benchmark comparativo" not in text
 
 
 def test_technical_pdf_contains_every_advanced_chart() -> None:

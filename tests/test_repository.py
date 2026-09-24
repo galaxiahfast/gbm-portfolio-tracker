@@ -61,7 +61,7 @@ def test_migrations_adopt_existing_database_and_recreate_missing_table(tmp_path)
 
     database = Database(path)
     database.initialize()
-    assert database.schema_version() == 12
+    assert database.schema_version() == 13
     with database.connect() as connection:
         columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(trades)")
@@ -127,6 +127,8 @@ def test_backtest_payload_is_persisted_with_auditable_hash(tmp_path) -> None:
     assert history[0]["id"] == run_id
     assert history[0]["status"] == "REJECTED"
     assert latest is not None and latest["payload_json"] == '{"result":"strict-oos"}'
+    assert repository.latest_backtest_run(symbol="SMCI")["id"] == run_id
+    assert repository.latest_backtest_run(symbol="NVDA") is None
     assert valid == 1
     assert invalid == ()
 
@@ -159,9 +161,9 @@ def test_live_model_feedback_is_unique_resolved_and_hash_audited(tmp_path) -> No
         symbol="SMCI",
         historical_bars=pd.DataFrame(
             {"Open": [40.0], "High": [42.0], "Low": [39.0], "Close": [41.0], "Volume": [100]},
-            index=pd.DatetimeIndex([observed_at + timedelta(minutes=55)]),
+            index=pd.DatetimeIndex([observed_at + timedelta(minutes=60)]),
         ),
-        current_as_of=observed_at + timedelta(minutes=61),
+        current_as_of=observed_at + timedelta(minutes=66),
     )
     stats = repository.live_model_stats("SMCI")
     valid, invalid = repository.verify_live_model_observations()

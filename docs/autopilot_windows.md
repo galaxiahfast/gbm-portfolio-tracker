@@ -197,3 +197,16 @@ La resolución real de estos pronósticos **queda pendiente del cierre**. Se pro
 - Si deseas cambiar la fórmula o extraer en el futuro toda la orquestación UI/headless a un servicio común, hazlo como tarea separada. Esta implementación mantiene intacto el motor solicitado.
 
 Referencias oficiales: [horario StartBoundary de Windows](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/nf-taskschd-itrigger-put_startboundary), [opciones del programador](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset).
+
+## Corte perdido y recuperación
+
+El colector programado reintenta fallos transitorios y locks cada 30 segundos
+únicamente entre 11:00 y 11:20 NY. En `logs/collector.log` deja
+`ALERTA_CORTE_EN_RIESGO` durante el reintento y `ALERTA_CORTE_PERDIDO` si
+vence la ventana sin un corte completo. El anclaje direccional exige además
+la vela cerrada de las 11:00 y emisión antes de las 11:05; reintentar más
+tarde **no** fabrica una predicción retrospectiva. La resolución/catch-up
+solo procesa pronósticos que sí fueron emitidos y firmados.
+Al arrancar, catch-up audita las cinco sesiones XNYS previas para detectar
+cohortes firmadas ausentes y registra `ALERTA_CORTE_PERDIDO` en
+`logs/catchup.log`; esta comprobación es de solo lectura.

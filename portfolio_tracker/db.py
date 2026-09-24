@@ -207,6 +207,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (10, "observaciones_v3_vencimientos_sesiones_xnys"),
     (11, "objetivo_operativo_tp_sl_timeout_inmutable"),
     (12, "checkpoints_operativos_incrementales_firmados"),
+    (13, "observaciones_anclaje_temporal_v1"),
 )
 
 
@@ -303,6 +304,8 @@ class Database:
                             self._create_operational_model_outcomes(connection)
                         elif version == 12:
                             self._create_operational_model_outcomes(connection)
+                        elif version == 13:
+                            self._upgrade_live_model_anchor(connection)
                     connection.execute(
                         """
                         INSERT INTO schema_migrations(version, name, applied_at)
@@ -340,6 +343,7 @@ class Database:
             "outcome_bar_at": "TEXT",
             "outcome_source": "TEXT",
             "resolution_sha256": "TEXT",
+            "anchor_version": "TEXT",
         }
         for name, definition in additions.items():
             if name not in columns:
@@ -365,6 +369,17 @@ class Database:
     def _upgrade_live_model_session_policy(connection: sqlite3.Connection) -> None:
         """Additive v10: protect V3 rows without rewriting V2 evidence."""
 
+        for trigger in (
+            "live_forecast_immutable",
+            "live_resolution_immutable",
+            "live_observation_no_delete",
+        ):
+            connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        Database._secure_live_model_history(connection)
+
+    @staticmethod
+    def _upgrade_live_model_anchor(connection: sqlite3.Connection) -> None:
+        """Add signed anchor metadata; retain V2/V3 rows and accounting untouched."""
         for trigger in (
             "live_forecast_immutable",
             "live_resolution_immutable",

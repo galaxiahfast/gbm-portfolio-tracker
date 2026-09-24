@@ -230,8 +230,12 @@ def apply_cross_context(analysis, context):
         score = max(score, 50.1)
     metadata = dict(context, base_score=base, applied_impact=round(score-base, 1))
     breakdown = tuple(c for c in analysis.score_breakdown if c.name != COMPONENT)
+    technical = getattr(analysis, "model_technical_analysis", None)
+    if technical is not None:
+        technical = apply_cross_context(technical, context)
     return replace(analysis, probability_up=score, probability_down=round(100-score, 1),
                    raw_probability_up=score, cross_asset_context=metadata,
+                   model_technical_analysis=technical,
                    score_breakdown=(*breakdown, ScoreComponent(COMPONENT, metadata["applied_impact"],
                        f"{metadata.get('detail', '')} Propuesto {impact:+.1f}; aplicado {metadata['applied_impact']:+.1f} puntos. "
                        "No cambia autorizaciones ni probabilidades de alcance.")))

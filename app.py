@@ -12,7 +12,6 @@ from dataclasses import asdict, replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -49,6 +48,7 @@ from portfolio_tracker.analytics.technical_probability import (
     TechnicalSignal,
     analyze_probability,
 )
+from portfolio_tracker.analytics.technical_validity import TechnicalDataVeto, validate_freshness
 from portfolio_tracker.config import DB_PATH, LOCAL_TIMEZONE, PROJECT_ROOT
 from portfolio_tracker.db import Database
 from portfolio_tracker.models import (
@@ -88,6 +88,12 @@ from portfolio_tracker.services.quant_market_data import (
     download_quant_frames,
     normalize_symbol,
 )
+from portfolio_tracker.services.predictor_market_data import (
+    PredictorMarketFrames,
+    informational_decision,
+    is_regular_nyse_session,
+    load_predictor_market_frames,
+)
 from portfolio_tracker.services.receipt_storage import ReceiptStorage
 from portfolio_tracker.services.validation import validate_trade
 from portfolio_tracker.ui import (
@@ -97,9 +103,11 @@ from portfolio_tracker.ui import (
     premium_line_chart,
 )
 from portfolio_tracker.ui.price_zones import render_operational_signal, render_price_zones
-from portfolio_tracker.ui.system_decision import render_system_decision
+from portfolio_tracker.ui.system_decision import render_system_decision, render_validation_banner
 from portfolio_tracker.services.price_zones import build_visual_zone_snapshot
 from portfolio_tracker.services.decision_engine import generate_decision
+from portfolio_tracker.services.operational_model_registry import latest_approved_operational_models
+from portfolio_tracker.services.operational_validation import validation_disclosure
 
 
 st.set_page_config(
@@ -177,11 +185,11 @@ def fetch_live_prices(
     return output, failures
 
 
-@st.cache_data(ttl="4m", max_entries=12, show_spinner=False)
-def fetch_probability_frames(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Mantiene las velas del predictor acotadas y actualizadas sin bloquear reruns."""
+@st.cache_data(ttl="90s", max_entries=12, show_spinner=False)
+def fetch_probability_frames(symbol: str) -> PredictorMarketFrames:
+    """Consulta automáticamente Yahoo o el respaldo firmado más reciente."""
 
-    return download_quant_frames(symbol)
+    return load_predictor_market_frames(symbol)
 
 
 @st.cache_data(ttl="30m", max_entries=12, show_spinner=False)
@@ -278,15 +286,10 @@ def show_market_notice() -> None:
         )
 
 
-US_MARKET_TIMEZONE = ZoneInfo("America/New_York")
-
-
 def us_regular_market_is_open(now: datetime | None = None) -> bool:
-    """Horario regular aproximado; Yahoo sigue siendo la fuente de la última vela."""
+    """Sesión regular XNYS, incluidos festivos y cierres anticipados."""
 
-    current = now or datetime.now(timezone.utc)
-    eastern = current.astimezone(US_MARKET_TIMEZONE)
-    return eastern.weekday() < 5 and time(9, 30) <= eastern.time() < time(16, 0)
+    return is_regular_nyse_session(now)
 
 
 def register_receipt(
@@ -1053,6 +1056,7 @@ def _render_probability_executive(
     *,
     zone_snapshot=None,
     system_decision=None,
+    validation_status=None,
 ) -> None:
     """Panel de decisión breve; no vuelve a consultar ni recalcula datos de mercado."""
 
@@ -1208,6 +1212,8 @@ def _render_probability_executive(
         _render_chart_patterns(analysis, compact=True)
 
     ordered_projections = ordered_horizon_projections(analysis.horizon_projections)
+    preliminary = bool(validation_status and validation_status["preliminary"])
+    provisional = " · PRELIMINAR" if preliminary else ""
     horizon_frame = pd.DataFrame(
         [
             {
@@ -1220,13 +1226,18 @@ def _render_probability_executive(
                 "Objetivo bajista": item.bearish_target,
                 "Motor": item.engine_name,
                 "Estado": item.probability_status,
+                "Validación operativa": (
+                    next((row["status"] for row in validation_status["rows"]
+                          if row["horizon"] == item.label), "PRELIMINAR")
+                    if validation_status else "PRELIMINAR"
+                ),
                 "Muestra": item.calibration_samples,
                 "Brier OOS": item.brier_score,
             }
             for item in ordered_projections
         ]
     )
-    st.subheader("Mapa de scores por horizonte", anchor=False)
+    st.subheader(f"Mapa de scores por horizonte{provisional}", anchor=False)
     with st.container(horizontal=True, gap="small"):
         st.badge("Escenario alcista", icon=":material/trending_up:", color="green")
         st.badge("Escenario lateral", icon=":material/trending_flat:", color="blue")
@@ -1241,23 +1252,23 @@ def _render_probability_executive(
         column_config={
             "Horizonte": st.column_config.TextColumn(pinned=True, width=92),
             "Lectura alcista": st.column_config.ProgressColumn(
-                "Score alcista", format="%.1f/100", min_value=0, max_value=100,
+                f"Score alcista{provisional}", format="%.1f/100", min_value=0, max_value=100,
                 color="green", width=105,
             ),
             "Objetivo alcista": st.column_config.NumberColumn(
-                "Objetivo ↑", format="$%.2f", width=105,
+                f"Objetivo ↑{provisional}", format="$%.2f", width=105,
             ),
             "Lectura lateral": st.column_config.ProgressColumn(
-                "Score lateral", format="%.1f/100", min_value=0, max_value=100,
+                f"Score lateral{provisional}", format="%.1f/100", min_value=0, max_value=100,
                 color="blue", width=105,
             ),
-            "Rango esperado": st.column_config.TextColumn(width=145),
+            "Rango esperado": st.column_config.TextColumn(f"Rango esperado{provisional}", width=145),
             "Lectura bajista": st.column_config.ProgressColumn(
-                "Score bajista", format="%.1f/100", min_value=0, max_value=100,
+                f"Score bajista{provisional}", format="%.1f/100", min_value=0, max_value=100,
                 color="red", width=105,
             ),
             "Objetivo bajista": st.column_config.NumberColumn(
-                "Objetivo ↓", format="$%.2f", width=105,
+                f"Objetivo ↓{provisional}", format="$%.2f", width=105,
             ),
             "Muestra": st.column_config.NumberColumn(format="%d"),
             "Brier OOS": st.column_config.NumberColumn(format="%.3f"),
@@ -1266,7 +1277,7 @@ def _render_probability_executive(
 
     with st.container(border=True):
         st.subheader(
-            "Velas históricas y trayectoria proyectada · 30 + 15 sesiones",
+            f"Velas históricas y trayectoria proyectada · 30 + 15 sesiones{provisional}",
             anchor=False,
         )
         projection_figure = build_15_day_projection_figure(
@@ -1507,11 +1518,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         "Motor cuantitativo · Fase 5",
         "Scores multi-temporales, calibración empírica y veto central de riesgo.",
     )
-    with st.container(key="quant_disclosure_duplicate"):
-        st.warning(
-            "Las lecturas se muestran como scores heurísticos sobre 100 mientras no exista "
-            "una muestra OOS masiva con Brier calibrado. No son probabilidades ni recomendaciones."
-        )
+    validation_slot = st.empty()
     # El contenedor conserva esta posición aunque los bytes se generen después.
     # Así los cuatro botones quedan físicamente encima de st.tabs.
     actions_slot = st.container(key="quant_actions")
@@ -1536,35 +1543,20 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             validation_panel(repository, forward_status)
         return  # Validation remains accessible if live analysis/data are unavailable.
 
-    with st.expander("Emisora y actualización", expanded=False):
+    with st.expander("Emisora", expanded=False):
         st.session_state.setdefault("predictor_symbol", "SMCI")
-        with st.form("probability_symbol_form", border=True):
-            with st.container(horizontal=True, vertical_alignment="bottom"):
-                symbol_input = st.text_input(
-                    "Emisora",
-                    value=st.session_state["predictor_symbol"],
-                    placeholder="SMCI",
-                    help="Ticker de Estados Unidos reconocido por Yahoo Finance.",
-                )
-                analyze_submitted = st.form_submit_button(
-                    "Analizar", type="primary", icon=":material/analytics:"
-                )
-        if analyze_submitted:
-            try:
-                st.session_state["predictor_symbol"] = normalize_symbol(symbol_input)
-            except QuantMarketDataError as exc:
-                st.error(str(exc))
-                return
-        symbol = st.session_state["predictor_symbol"]
-
-        if st.button(
-            "Actualizar velas ahora",
-            icon=":material/refresh:",
-            key="refresh_probability_data",
-        ):
-            fetch_probability_frames.clear()
-            fetch_fundamental_snapshot.clear()
-            st.rerun()
+        st.session_state.setdefault("predictor_symbol_input", st.session_state["predictor_symbol"])
+        symbol_input = st.text_input(
+            "Emisora", key="predictor_symbol_input", placeholder="SMCI",
+            help="Escribe el ticker y presiona Enter. El análisis se actualiza automáticamente.",
+        )
+        try:
+            symbol = normalize_symbol(symbol_input)
+        except QuantMarketDataError as exc:
+            st.error(str(exc))
+            return
+        st.session_state["predictor_symbol"] = symbol
+        st.caption("El análisis carga al entrar y se renueva cada 5 minutos durante la sesión.")
 
     output = st.container()
     from portfolio_tracker.analytics.backtesting import ENGINE_VERSION
@@ -1573,17 +1565,24 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         "stop_atr_multiple": 2.25,
         "risk_per_trade_pct": 1.0,
     }
+    market_frames = None
+    freshness_issue = None
     try:
         with output.skeleton(height=360):
             prefetch_cross_asset(symbol)
-            intraday, daily = fetch_probability_frames(symbol)
+            market_frames = fetch_probability_frames(symbol)
+            intraday, daily = market_frames.intraday, market_frames.daily
+            try:
+                validate_freshness(intraday, daily, datetime.now(timezone.utc))
+            except TechnicalDataVeto as exc:
+                freshness_issue = str(exc)
             from portfolio_tracker.services.operational_state import macro_memory
             analysis = analyze_probability(
                 symbol,
                 intraday,
                 daily,
                 previous_macro_trending=macro_memory(repository.database, symbol),
-                require_fresh=True,
+                require_fresh=freshness_issue is None,
                 as_of_time=datetime.now(timezone.utc),
                 atr_stop_multiple=float(
                     calibrated_parameters.get("stop_atr_multiple", 2.25)
@@ -1690,30 +1689,73 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         ),
     )
 
-    from portfolio_tracker.services.operational_state import synchronize_position
-    try:
-        analysis = synchronize_position(repository.database, analysis)
-    except ValueError as exc:
-        st.error(f"Motor bloqueado por integridad del estado: {exc}")
-        return
+    if freshness_issue is None:
+        from portfolio_tracker.services.operational_state import synchronize_position
+        try:
+            analysis = synchronize_position(repository.database, analysis)
+        except ValueError as exc:
+            st.error(f"Motor bloqueado por integridad del estado: {exc}")
+            return
+    else:
+        analysis = replace(
+            analysis, position_state="UNKNOWN",
+            position_management="Estado operativo no reconciliado con velas vigentes.",
+        )
+
+    data_notices = []
+    if market_frames.source_warning:
+        data_notices.append(market_frames.source_warning)
+    if market_frames.reconstructed_sessions:
+        data_notices.append(
+            "Cierre diario reconstruido desde todas las velas de 5 min de la sesión completa: "
+            + ", ".join(market_frames.reconstructed_sessions) + "."
+        )
+    if freshness_issue:
+        data_notices.append(
+            f"Datos retrasados: {freshness_issue} Se muestra el último análisis disponible, "
+            "sin autorización para operar."
+        )
+    if not live_mode:
+        data_notices.append(
+            "Mercado NYSE cerrado: el análisis corresponde al último corte disponible; "
+            "no es una orden ejecutable ahora."
+        )
+    if data_notices:
+        analysis = replace(analysis, warnings=(*analysis.warnings, *data_notices))
+        for notice in data_notices:
+            output.warning(notice)
 
     # Emissions are deliberately independent of opening/refreshing Streamlit:
     # the 11:00 NY headless collector writes one signed cohort per session.
     online_stats = repository.live_model_stats(analysis.symbol)
+    operational_coverage = repository.operational_event_coverage(analysis.symbol)
+    validation_counts = repository.operational_validation_counts(analysis.symbol)
+    approved_models = latest_approved_operational_models(analysis.symbol, analysis.source_bar_closed_at)
+    validation_status = validation_disclosure(validation_counts, set(approved_models))
+    render_validation_banner(validation_status, validation_slot)
 
     with st.expander("Estado de datos y calibración", expanded=False):
         with st.container(horizontal=True, vertical_alignment="center"):
             st.badge(
+                "Mercado EUA abierto · datos retrasados"
+                if live_mode and freshness_issue else
                 "Mercado EUA abierto · actualización cada 5 min"
-                if live_mode
-                else "Mercado EUA cerrado · último corte disponible",
-                color="green" if live_mode else "gray",
-                icon=":material/sync:" if live_mode else ":material/schedule:",
+                if live_mode else "Mercado EUA cerrado · último corte disponible",
+                color="orange" if freshness_issue else "green" if live_mode else "gray",
+                icon=":material/sync:" if live_mode and not freshness_issue else ":material/schedule:",
             )
             st.caption(
-                f"Realimentación resuelta: {online_stats['resolved']} observaciones · "
-                f"acierto agregado diagnóstico {online_stats['accuracy']:.1%}. "
-                "El agregado mezcla horizontes y está desactivado para decisiones."
+                f"Diagnóstico direccional: {online_stats['resolved']} filas · "
+                f"acierto por fila {online_stats['accuracy']:.1%}. "
+                "Estas filas comparten eventos entre horizontes: no son operaciones independientes "
+                "y no se usan para decidir."
+            )
+            st.caption(
+                f"Cobertura sin duplicar: {operational_coverage['tp_first_events']} TP primero "
+                f"en {operational_coverage['resolved_events']} eventos independientes "
+                f"({operational_coverage['horizon_resolutions']} resoluciones por horizonte). "
+                f"Muestra: {operational_coverage['verified_cuts']} cortes firmados recientes. "
+                "Son barreras hipotéticas, no operaciones ejecutadas."
             )
             st.badge(
                 analysis.probability_status,
@@ -1734,6 +1776,10 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         )
         st.dataframe([
             {"Horizonte": h.label, "Estado": h.probability_status,
+             "Validación operativa": next(
+                 row["status"] for row in validation_status["rows"] if row["horizon"] == h.label
+             ),
+             "Entradas elegibles / 300": validation_counts[h.label]["eligible"],
              "Entrenamiento": h.calibration_training_samples, "Calibración": h.calibration_fit_samples,
              "Holdout": h.calibration_holdout_samples, "Purgadas": h.calibration_excluded,
              "Brier OOS": h.brier_score, "Brier crudo OOS": h.raw_brier_score,
@@ -1755,11 +1801,22 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
 
     # Vista y PDFs: transformación dinámica exclusivamente en memoria. La única
     # escritura de zone_prediction_log pertenece al colector headless de las 11 NY.
-    zone_snapshot = build_visual_zone_snapshot(analysis, repository=repository)
+    if freshness_issue:
+        zone_snapshot = build_visual_zone_snapshot(
+            analysis, repository=repository, now=analysis.source_bar_closed_at,
+        )
+    else:
+        zone_snapshot = build_visual_zone_snapshot(analysis, repository=repository)
     system_decision = generate_decision(
         analysis.symbol, analysis=analysis, repository=repository,
         zone_snapshot=zone_snapshot,
+        operational_models=approved_models, validation_counts=validation_counts,
     )
+    if freshness_issue or not live_mode:
+        system_decision = informational_decision(
+            system_decision,
+            "El mercado está cerrado o las velas no están vigentes para una decisión inmediata.",
+        )
     executive_pdf = build_executive_report(
         analysis, zone_snapshot=zone_snapshot, system_decision=system_decision,
     )
@@ -1770,8 +1827,9 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         analysis, zone_snapshot=zone_snapshot, system_decision=system_decision,
     )
     calibration_context = {
-        "backtest_run": repository.latest_backtest_run(),
+        "backtest_run": repository.latest_backtest_run(symbol=analysis.symbol),
         "online_stats": online_stats,
+        "operational_coverage": operational_coverage,
     }
     master_pdf = build_master_report(
         analysis, calibration_context, zone_snapshot=zone_snapshot,
@@ -1824,6 +1882,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                 analysis,
                 zone_snapshot=zone_snapshot,
                 system_decision=system_decision,
+                validation_status=validation_status,
             )
             render_cross_asset(analysis)
             with st.expander("Fundamentales y noticias", expanded=False):
@@ -1909,7 +1968,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
 
             with st.container(horizontal=True):
                 st.metric(
-                    analysis.bullish_display_label,
+                    analysis.bullish_display_label + (" · PRELIMINAR" if validation_status["preliminary"] else ""),
                     f"{analysis.probability_up:.1f}{'%' if analysis.has_empirical_probability else '/100'}",
                     delta=analysis.calibration_disclosure,
                     delta_color="off",
@@ -1917,7 +1976,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                     icon=":material/trending_up:",
                 )
                 st.metric(
-                    analysis.bearish_display_label,
+                    analysis.bearish_display_label + (" · PRELIMINAR" if validation_status["preliminary"] else ""),
                     f"{analysis.probability_down:.1f}{'%' if analysis.has_empirical_probability else '/100'}",
                     delta=analysis.calibration_disclosure,
                     delta_color="off",
@@ -1931,14 +1990,14 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                     icon=":material/attach_money:",
                 )
                 st.metric(
-                    "Nivel técnico sugerido",
+                    "Nivel técnico sugerido · PRELIMINAR" if validation_status["preliminary"] else "Nivel técnico sugerido",
                     f"${analysis.suggested_level:,.2f}",
                     border=True,
                     icon=":material/my_location:",
                     help="Nivel de vigilancia derivado de Bollinger, VWAP, pivotes y Fibonacci; no es una orden.",
                 )
                 st.metric(
-                    "Score de operación",
+                    "Score de operación · PRELIMINAR" if validation_status["preliminary"] else "Score de operación",
                     (
                         f"{analysis.operation_probability:.1f}/100"
                         if analysis.signal in (TechnicalSignal.BUY, TechnicalSignal.SELL)
@@ -2220,7 +2279,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
 def _live_probability_predictor() -> None:
     """Actualiza solo el predictor durante la sesión regular estadounidense."""
 
-    _probability_predictor_content(live_mode=True)
+    _probability_predictor_content(live_mode=us_regular_market_is_open())
 
 
 def probability_predictor_page() -> None:

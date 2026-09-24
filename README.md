@@ -148,6 +148,13 @@ fuera de muestra tempranas y se verifica con predicciones posteriores; exige
 mejora frente al score sin ajustar y al baseline. La evaluación final conserva
 el holdout sellado hasta que toda la selección queda congelada.
 
+La [selección operativa por expectativa neta](docs/net_expectation_selection.md)
+usa exclusivamente modelos de primer toque TP/SL/timeout aprobados en ese
+protocolo. Compara el resultado esperado total después de comisión y deslizamiento,
+con límites de riesgo, efectivo y concentración. Un score alcista alto por sí
+solo ya no autoriza COMPRAR; sin modelos operativos suficientes la decisión es
+ESPERAR, no una probabilidad inventada.
+
 Las pestañas son dinámicas: la vista técnica solo construye sus gráficas cuando se abre. El PDF se genera en memoria con ReportLab, no escribe datos del usuario en el repositorio e incluye la trayectoria vectorial de 15 sesiones, Bandas de Bollinger/VWAP, Estocástico RSI, MACD intradía y estructura EMA diaria construidos desde los mismos DataFrames reales de la vista avanzada, además del bloque estructurado para revisión por otra IA.
 
 Justo encima de las tres pestañas, la barra del predictor ofrece cuatro descargas consistentes con el mismo corte de mercado: Vista Ejecutiva, Vista Técnica Avanzada, PDF combinado de ambas y PDF Maestro. El maestro añade la última calibración/backtesting registrada, sus parámetros, métricas OOS, realimentación progresiva y verificación SHA-256. El PDF técnico incorpora quince paneles disponibles: Bollinger/VWAP, Estocástico RSI, MACD 5m y 1h, ADX/+DI/-DI, OBV, estructuras EMA diaria/semanal/mensual, MACD diario/semanal/mensual, Ichimoku diario y dos paneles de patrones chartistas (5m y diario). Si una temporalidad todavía no reúne observaciones suficientes, el reporte lo indica sin cancelar las demás páginas.

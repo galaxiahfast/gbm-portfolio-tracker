@@ -21,7 +21,7 @@ import pandas as pd
 
 from .model_observations import canonical, utc_timestamp
 
-FEATURE_SCHEMA_VERSION = 1
+FEATURE_SCHEMA_VERSION = 2
 FEATURE_NAMES = (
     "last_price", "probability_up", "probability_down", "operation_probability",
     "atr_5m", "stochastic_k", "stochastic_d", "volume_ratio", "volume_confirmed",
@@ -48,6 +48,7 @@ CODE_FILES = (
     "portfolio_tracker/analytics/technical_probability.py",
     "portfolio_tracker/analytics/multi_timeframe.py",
     "portfolio_tracker/analytics/closed_bars.py",
+    "portfolio_tracker/analytics/temporal_contract.py",
     "portfolio_tracker/analytics/causal_core.py",
     "portfolio_tracker/analytics/technical_validity.py",
     "portfolio_tracker/analytics/decision_engines.py",
@@ -128,13 +129,19 @@ def _indicator_tail(analysis) -> dict[str, Any]:
 
 def build_replay_snapshot(analysis, *, observed_at: datetime, protocol: str,
                           input_artifacts: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    from portfolio_tracker.analytics.horizon_models import MODEL_FEATURE_VERSION
     observed = utc_timestamp(observed_at)
     source = utc_timestamp(analysis.source_bar_closed_at)
     session_date = observed.tz_convert("America/New_York").date().isoformat()
     artifacts = _jsonable(dict(input_artifacts or {}))
     features = {name: _jsonable(getattr(analysis, name, None)) for name in FEATURE_NAMES}
+    technical = getattr(analysis, "model_technical_analysis", None) or analysis
+    if getattr(analysis, "fundamental_as_of", "") and technical is analysis:
+        raise ValueError("Falta la vista técnica previa al filtro fundamental; no se guardan features del modelo.")
+    model_features = {name: _jsonable(getattr(technical, name, None)) for name in FEATURE_NAMES}
     snapshot = {
         "schema_version": FEATURE_SCHEMA_VERSION,
+        "model_feature_version": MODEL_FEATURE_VERSION,
         "run_id": execution_id(analysis.symbol, session_date, protocol),
         "symbol": analysis.symbol.strip().upper(),
         "session_date": session_date,
@@ -142,6 +149,7 @@ def build_replay_snapshot(analysis, *, observed_at: datetime, protocol: str,
         "observed_at": observed.isoformat(),
         "source_bar_closed_at": source.isoformat(),
         "features": features,
+        "model_features": model_features,
         "indicator_tail": _indicator_tail(analysis),
         "fundamental_snapshot_sha256": str(getattr(analysis, "fundamental_snapshot_sha256", "") or ""),
         "input_artifacts": artifacts,
@@ -153,6 +161,12 @@ def build_replay_snapshot(analysis, *, observed_at: datetime, protocol: str,
     }
     canonical(snapshot)  # reject malformed/non-finite nested values before any DB write
     return snapshot
+
+
+def technical_horizon(analysis, label):
+    """Return the pre-news projection for training/inference, not UI context."""
+    technical = getattr(analysis, "model_technical_analysis", None) or analysis
+    return next(item for item in technical.horizon_projections if item.label == label)
 
 
 def prediction_snapshot(horizon) -> dict[str, Any]:

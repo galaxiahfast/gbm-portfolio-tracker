@@ -69,7 +69,7 @@ def _render_list(zones, price, estimates):
                 f"({_formatted(distance[1], '+.2f')}%)"
             ))
         if estimate is None:
-            st.caption("Alcance hoy: N/D · Estimación no disponible")
+            st.caption("PRELIMINAR · Alcance hoy: N/D · Estimación no disponible")
             st.caption(proximity)
             st.caption(str(zone.source or "Sin procedencia disponible"))
             continue
@@ -80,8 +80,8 @@ def _render_list(zones, price, estimates):
             touch = 'N/D' if touch_value is None else f'{_formatted(touch_value, ".0f")}%'
             close = 'N/D' if close_value is None else f'{_formatted(close_value, ".0f")}%'
             direction = 'debajo' if getattr(estimate, 'close_direction', '') == 'BELOW' else 'encima'
-            st.markdown(f'**Probabilidad estimada de toque hoy: {touch}**')
-            st.caption(f'Probabilidad de cierre {direction}: {close}')
+            st.markdown(f'**Probabilidad estimada de toque hoy: {touch} · PRELIMINAR**')
+            st.caption(f'Probabilidad de cierre {direction}: {close} · PRELIMINAR')
             st.caption(_confidence_text(estimate, include_close=True))
             effective_value = _finite(getattr(estimate, "effective_samples", None))
             effective = '' if effective_value is None else f' ({_formatted(effective_value, ".1f")} efectivas)'
@@ -89,10 +89,10 @@ def _render_list(zones, price, estimates):
             status = str(getattr(estimate, "status", "Estimación no disponible") or "Estimación no disponible")
             st.caption(f'{samples} sesiones{effective} · {status}')
         elif _finite(getattr(estimate, "probability", None)) is None:
-            st.caption(f"Alcance hoy: N/D · {getattr(estimate, 'status', 'Estimación no disponible')}")
+            st.caption(f"PRELIMINAR · Alcance hoy: N/D · {getattr(estimate, 'status', 'Estimación no disponible')}")
         else:
             probability = _finite(getattr(estimate, "probability", None))
-            st.caption(f"Probabilidad estimada de alcance hoy: {_formatted(probability, '.0f')}%")
+            st.caption(f"Probabilidad estimada de alcance hoy: {_formatted(probability, '.0f')}% · PRELIMINAR")
             interval = _confidence_text(estimate, include_close=False)
             st.caption(
                 f"{interval} · {getattr(estimate, 'samples', 0)} sesiones · "
