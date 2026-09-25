@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 import json
+import math
 from zoneinfo import ZoneInfo
 
 from .model_observations import is_regular_close, utc_timestamp
@@ -22,6 +23,7 @@ COLLECTION_PROTOCOL = "XNYS_1100_OPERATIONAL_TARGET_V3"
 SUPPORTED_COLLECTION_PROTOCOLS = {
     LEGACY_COLLECTION_PROTOCOL, PREVIOUS_COLLECTION_PROTOCOL, COLLECTION_PROTOCOL,
 }
+NO_VALID_PLAN = "NO_VALID_FIRST_PASSAGE_PLAN"
 HORIZON_MINUTES = {
     "1 Hora": 60,
     "6 Horas": 360,
@@ -30,6 +32,33 @@ HORIZON_MINUTES = {
     "1 Mes": 43_200,
     "6 Meses": 259_200,
 }
+
+
+def valid_unavailable_plan(metadata, reference_price) -> bool:
+    """A signed directional-only row must prove why no barrier was created."""
+    if (metadata.get("operational_status") != NO_VALID_PLAN
+            or metadata.get("primary_validation_target") != "DIRECTIONAL_ONLY"
+            or metadata.get("operational_contract") is not None):
+        return False
+    levels = metadata.get("invalid_plan_levels")
+    if not isinstance(levels, dict) or set(levels) != {
+            "side", "entry_price", "stop_loss", "take_profit"}:
+        return False
+    try:
+        entry, stop, target = (float(levels[key]) for key in (
+            "entry_price", "stop_loss", "take_profit"))
+        reference = float(reference_price)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (not all(math.isfinite(value) and value > 0 for value in (
+            entry, stop, target, reference)) or abs(entry - reference) > 1e-9):
+        return False
+    side = levels["side"]
+    if side == "LONG":
+        return not stop < entry < target
+    if side == "SHORT":
+        return not target < entry < stop
+    return False
 
 
 def scenario_parameters(parameters, *, protocol=COLLECTION_PROTOCOL):
@@ -75,9 +104,17 @@ def cut_forecasts(
         horizon = horizons[label]
         model_prediction = prediction_snapshot(technical_horizon(analysis, label))
         contract = make_scenario_contract(analysis.symbol, horizon, minutes, model_parameters)
-        operational_contract = make_operational_contract(
-            analysis.symbol, horizon, minutes, analysis, observed_at, model_parameters,
-        )
+        try:
+            operational_contract = make_operational_contract(
+                analysis.symbol, horizon, minutes, analysis, observed_at, model_parameters,
+            )
+        except ValueError as exc:
+            # A stale plan (e.g. price has already crossed TP1) cannot be
+            # treated as a realizable entry. Preserve the real directional
+            # forecast, but never invent replacement barriers or an outcome.
+            if str(exc) != "TP/entrada/SL no encierran correctamente el precio de referencia.":
+                raise
+            operational_contract = None
         model_manifest = model_feature_contract(
             {"feature_snapshot": replay},
             {"prediction": prediction_snapshot(horizon),
@@ -93,7 +130,20 @@ def cut_forecasts(
                 "feedback_version": 3,
                 "scenario_contract": contract,
                 "operational_contract": operational_contract,
-                "primary_validation_target": operational_contract["version"],
+                "primary_validation_target": (
+                    operational_contract["version"] if operational_contract else "DIRECTIONAL_ONLY"
+                ),
+                "operational_status": (
+                    "VALID_PLAN" if operational_contract else NO_VALID_PLAN
+                ),
+                "invalid_plan_levels": (
+                    None if operational_contract else {
+                        "side": str(analysis.execution_levels.direction).upper(),
+                        "entry_price": float(analysis.last_price),
+                        "stop_loss": float(analysis.execution_levels.stop_loss),
+                        "take_profit": float(analysis.execution_levels.take_profit_1),
+                    }
+                ),
                 "collection_protocol": protocol,
                 "scheduled_cut_ny": scheduled_cut(observed).tz_convert(NY).strftime("%H:%M"),
                 "anchor_version": ANCHOR_VERSION,

@@ -243,6 +243,8 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
     from portfolio_tracker.services.directional_collection import record_fixed_directional
     from portfolio_tracker.services.price_zones import build_zone_snapshot
     from portfolio_tracker.services.zone_forward import log_snapshot
+    from portfolio_tracker.services.directional_collection import COLLECTION_PROTOCOL, NO_VALID_PLAN
+    from portfolio_tracker.services.model_execution_record import execution_id
     from scripts.autopilot_market_cache import MarketCache
     failed = False
     cache = MarketCache(Path(state_dir) / "market")
@@ -258,6 +260,11 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
             earliest = (datetime.combine(now.astimezone(NY).date(), time(11), NY)
                         if now.astimezone(NY).time() >= time(11) else None)
             zones_done = completed_group(repository, symbol, day, earliest)
+            run_id = execution_id(symbol, day, COLLECTION_PROTOCOL)
+            existing_cut = repository.live_model_execution_record(run_id)
+            if zones_done and existing_cut is not None:
+                log.info("%s: corte direccional y zonas completos; sin descarga ni recálculo", symbol)
+                continue
             fundamental, fundamental_hash = fundamental_context(repository, symbol, log)
             intraday, daily = cache.frames(symbol, now_fn())
             input_artifacts = cache.artifact_refs(symbol)
@@ -276,6 +283,16 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
                     input_artifacts=input_artifacts,
                 )
                 log.info("%s: corte direccional 11 NY: %s/6 observaciones nuevas; sin duplicados", symbol, saved)
+                signed_cut = repository.live_model_execution_record(run_id)
+                if signed_cut and any(
+                    item.get("operational_status") == NO_VALID_PLAN
+                    for item in signed_cut["predictions"]
+                ):
+                    log.warning(
+                        "%s: corte direccional firmado SIN_PLAN_OPERATIVO: "
+                        "TP/entrada/SL incompatibles; cero entradas elegibles, "
+                        "no se simula una operación ficticia", symbol,
+                    )
             else:
                 log.info("%s: corte direccional NO_ACCIONABLE; se conserva solo la predicción de zonas", symbol)
             if not zones_done:
@@ -289,9 +306,6 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
             else:
                 log.info("%s: ya hay seis zonas íntegras de hoy; sin duplicar", symbol)
             if scheduled:
-                from portfolio_tracker.services.directional_collection import COLLECTION_PROTOCOL
-                from portfolio_tracker.services.model_execution_record import execution_id
-                run_id = execution_id(symbol, day, COLLECTION_PROTOCOL)
                 if repository.live_model_execution_record(run_id) is None:
                     failed = True
                     log.warning("ALERTA_CORTE_EN_RIESGO %s %s: faltan observaciones direccionales firmadas", symbol, day)

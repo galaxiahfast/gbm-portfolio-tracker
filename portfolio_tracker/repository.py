@@ -731,7 +731,7 @@ class PortfolioRepository:
     ) -> int:
         """Atomic fixed-session cohort. A retry never adds a second 11 NY sample."""
         from .services.model_observations import VERSION, canonical, valid_observation
-        from .services.directional_collection import HORIZON_MINUTES
+        from .services.directional_collection import HORIZON_MINUTES, valid_unavailable_plan
         from .services.model_execution_record import execution_id
         from .analytics.operational_target import (
             TARGET_VERSION, validate_operational_contract, valid_operational_outcome,
@@ -762,6 +762,10 @@ class PortfolioRepository:
             raise ValueError("El snapshot reproducible del lote no coincide.")
         for row, item in zip(rows, metadata):
             operational = item.get("operational_contract")
+            if operational is None:
+                if not valid_unavailable_plan(item, row["reference_price"]):
+                    raise ValueError("Falta un plan operativo válido o su causa firmada.")
+                continue
             validate_operational_contract(operational)
             if (item.get("primary_validation_target") != TARGET_VERSION
                     or operational["model"]["symbol"] != row["symbol"]
@@ -790,10 +794,14 @@ class PortfolioRepository:
                     ids,
                 ).fetchall()
                 parents = {int(item["id"]): item for item in prior}
+                expected_child_ids = {
+                    int(item["id"]) for item in prior
+                    if json.loads(item["parameters_json"]).get("operational_contract") is not None
+                }
                 if len(prior) == len(rows) and {
                     int(item["horizon_minutes"]) for item in prior
                 } == set(HORIZON_MINUTES.values()) and all(valid_observation(item) for item in prior) \
-                        and len(children) == len(rows) and all(
+                        and {int(child["observation_id"]) for child in children} == expected_child_ids and all(
                             valid_operational_outcome(child, parents[int(child["observation_id"])])
                             for child in children
                         ):
@@ -815,6 +823,8 @@ class PortfolioRepository:
                     tuple(row[name] for name in names),
                 )
                 contract = json.loads(row["parameters_json"])["operational_contract"]
+                if contract is None:
+                    continue  # Directional evidence only; no hypothetical TP/SL label.
                 connection.execute(
                     """INSERT INTO operational_model_outcomes(
                         observation_id,target_version,contract_sha256,resolution_status,created_at
@@ -869,6 +879,7 @@ class PortfolioRepository:
             )
             from .services.directional_collection import (
                 COLLECTION_PROTOCOL, PREVIOUS_COLLECTION_PROTOCOL, LEGACY_COLLECTION_PROTOCOL,
+                valid_unavailable_plan,
             )
             replay = metadata[0]["replay"]
             if not isinstance(replay, dict) or any(
@@ -902,11 +913,17 @@ class PortfolioRepository:
                 operational_result = None
                 if requires_operational_target:
                     operational_contract = item["operational_contract"]
-                    validate_operational_contract(operational_contract)
-                    operational_result = operational_by_id.get(int(row["id"]))
-                    if (operational_result is None
-                            or not valid_operational_outcome(operational_result, row)):
-                        return None
+                    if operational_contract is None:
+                        if (stored_protocol != COLLECTION_PROTOCOL
+                                or not valid_unavailable_plan(item, row["reference_price"])
+                                or int(row["id"]) in operational_by_id):
+                            return None
+                    else:
+                        validate_operational_contract(operational_contract)
+                        operational_result = operational_by_id.get(int(row["id"]))
+                        if (operational_result is None
+                                or not valid_operational_outcome(operational_result, row)):
+                            return None
                 if (row["symbol"] != symbol or row["observed_at"] != replay["observed_at"]
                     or row["source_bar_at"] != replay["source_bar_closed_at"]
                     or item["session_date"] != session
@@ -943,7 +960,10 @@ class PortfolioRepository:
                     "observation_sha256": row["observation_sha256"],
                     "resolution_sha256": row["resolution_sha256"],
                 }
-                if requires_operational_target:
+                if requires_operational_target and operational_contract is None:
+                    prediction["operational_status"] = item["operational_status"]
+                    prediction["invalid_plan_levels"] = item["invalid_plan_levels"]
+                if requires_operational_target and operational_contract is not None:
                     prediction["operational_target"] = operational_contract
                     prediction["operational_result"] = {
                         "resolution_status": operational_result["resolution_status"],

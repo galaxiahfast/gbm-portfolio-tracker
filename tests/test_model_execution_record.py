@@ -218,6 +218,37 @@ def test_six_forecasts_share_signed_execution_and_replay_features(repository):
         assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
 
 
+def test_crossed_take_profit_keeps_directional_cut_without_fake_trade(repository):
+    analysis = _analysis()
+    analysis.execution_levels.take_profit_1 = 99.0  # already below the 100 close
+    assert record_fixed_directional(repository, analysis, {}, CUT) == 6
+    run_id = execution_id("SMCI", "2026-09-03", COLLECTION_PROTOCOL)
+    record = repository.live_model_execution_record(run_id)
+    assert record is not None
+    assert len(record["predictions"]) == 6
+    assert {row["operational_status"] for row in record["predictions"]} == {
+        "NO_VALID_FIRST_PASSAGE_PLAN"
+    }
+    assert all("operational_target" not in row for row in record["predictions"])
+    assert record_fixed_directional(repository, analysis, {}, CUT) == 0
+    with repository.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM operational_model_outcomes").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+    assert repository.verify_live_model_observations() == (6, ())
+    assert all(row == {"resolved": 0, "eligible": 0} for row in
+               repository.operational_validation_counts("SMCI").values())
+
+
+def test_missing_operational_child_for_valid_plan_is_not_directional_only(repository):
+    assert record_fixed_directional(repository, _analysis(), {}, CUT) == 6
+    run_id = execution_id("SMCI", "2026-09-03", COLLECTION_PROTOCOL)
+    with repository.database.transaction() as connection:
+        connection.execute("DROP TRIGGER operational_model_no_delete")
+        connection.execute("DELETE FROM operational_model_outcomes WHERE observation_id IN "
+                           "(SELECT id FROM live_model_observations WHERE horizon_minutes=60)")
+    assert repository.live_model_execution_record(run_id) is None
+
+
 def test_exact_outcome_is_attached_to_same_verified_execution(repository):
     assert record_fixed_directional(repository, _analysis(), {}, CUT) == 6
     run_id = execution_id("SMCI", "2026-09-03", COLLECTION_PROTOCOL)

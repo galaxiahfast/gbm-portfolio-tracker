@@ -153,9 +153,24 @@ class MarketCache:
         closed = select_last_closed_bar(combined, "5m", clock)
         self._write(intra_path, closed, clock, {k: str(v) for k, v in request.items()})
         daily, meta = self._read(daily_path)
+        schedule = _calendar(local.year - 1, local.year + 1).schedule
+        completed = schedule.loc[schedule["close"] <= clock]
+        if completed.empty:
+            raise ValueError("No hay sesión diaria XNYS cerrada para validar el contexto.")
+        required_day = completed.index[-1].date()
+        cached_day = pd.Timestamp(daily.index[-1]).date() if daily is not None and not daily.empty else None
         # Five years like the UI, not the shorter validation-context cache.
-        if daily is None or utc(meta["fetched_at"]).tz_convert(NY).date() != local.date():
-            daily = _normalize_frame(self.download(symbol, period="5y", interval="1d"), symbol)
-            daily = select_last_closed_bar(daily, "1d", clock)
+        if (daily is None or cached_day != required_day
+                or utc(meta["fetched_at"]).tz_convert(NY).date() != local.date()):
+            downloaded = _normalize_frame(self.download(symbol, period="5y", interval="1d"), symbol)
+            daily = select_last_closed_bar(downloaded, "1d", clock)
+            newest_day = pd.Timestamp(daily.index[-1]).date() if not daily.empty else None
+            if newest_day != required_day:
+                # A provider lag is not a valid daily context. Do not mark the
+                # partial fetch as today's cache; the next scheduled attempt
+                # must actually fetch again, still before its 11:05 deadline.
+                raise ValueError(
+                    f"Contexto 1d incompleto: último {newest_day}; requerido {required_day}."
+                )
             self._write(daily_path, daily, clock, {"period": "5y", "interval": "1d"})
         return closed, select_last_closed_bar(daily, "1d", clock)

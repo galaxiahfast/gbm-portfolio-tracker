@@ -179,6 +179,29 @@ def test_collection_six_each_idempotent_and_no_ledger_writes(repo, tmp_path, mon
         assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
 
 
+def test_scheduled_collector_keeps_crossed_tp_as_directional_only(repo, tmp_path, monkeypatch, caplog):
+    import portfolio_tracker.services.price_zones as zones
+    monkeypatch.setattr(runtime, "fundamental_context", lambda *_: (None, ""))
+    monkeypatch.setattr(MarketCache, "frames", lambda *_: (None, None))
+    def analysis(repository, symbol, *args):
+        result = synthetic_analysis(symbol)
+        if symbol == "SMCI":
+            result.execution_levels.take_profit_1 = 99.0
+        return result
+    monkeypatch.setattr(runtime, "analyze_headless", analysis)
+    monkeypatch.setattr(zones, "build_zone_snapshot", lambda _, now: synthetic_snapshot(now))
+    with caplog.at_level(logging.INFO):
+        assert runtime.collect(
+            repo, ["SMCI", "NVDA"], tmp_path, logging.getLogger("collector-regression"),
+            scheduled=True, now_fn=lambda: UTC_TIME,
+        ) == 0
+    assert "SIN_PLAN_OPERATIVO" in caplog.text
+    with repo.database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM live_model_observations").fetchone()[0] == 12
+        assert connection.execute("SELECT COUNT(*) FROM operational_model_outcomes").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+
+
 def test_failure_one_symbol_continues_other(repo, tmp_path, monkeypatch):
     import portfolio_tracker.services.price_zones as zones
     def fundamental(r, symbol, log):
@@ -301,6 +324,25 @@ def test_incremental_cache_does_not_download_month_again(tmp_path):
     assert len(second) == len(first) + 1
     assert len([c for c in calls if c["interval"]=="1d"]) == 1
     assert len(list(tmp_path.glob("SMCI/archive/*.json"))) == 3
+
+
+def test_incomplete_daily_provider_response_is_not_cached_as_fresh(tmp_path):
+    daily_calls = []
+    def download(symbol, **kwargs):
+        if kwargs["interval"] == "1d":
+            daily_calls.append(1)
+            last = "2026-09-01" if len(daily_calls) == 1 else "2026-09-02"
+            index = pd.bdate_range("2026-08-01", last)
+        else:
+            index = pd.date_range("2026-09-03T13:30:00Z", "2026-09-03T15:00:00Z", freq="5min")
+        return pd.DataFrame(dict(Open=100., High=101., Low=99., Close=100., Volume=1000.), index=index)
+    cache = MarketCache(tmp_path, download=download)
+    with pytest.raises(ValueError, match="Contexto 1d incompleto"):
+        cache.frames("SMCI", UTC_TIME)
+    assert not (tmp_path / "SMCI" / "daily.json").exists()
+    _, daily = cache.frames("SMCI", pd.Timestamp("2026-09-03T15:00:40Z"))
+    assert pd.Timestamp(daily.index[-1]).date().isoformat() == "2026-09-02"
+    assert len(daily_calls) == 2
 
 
 def test_cache_hash_fails_closed(tmp_path):
