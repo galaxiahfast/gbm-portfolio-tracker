@@ -11,7 +11,9 @@ from portfolio_tracker.analytics.net_expectation import (
 )
 from portfolio_tracker.services.operational_model_registry import _approved_result
 from portfolio_tracker.analytics.operational_target import TARGET_VERSION
-from portfolio_tracker.analytics.horizon_models import FEATURE_NAMES, MODEL_FEATURE_VERSION, _sha
+from portfolio_tracker.analytics.horizon_models import (
+    FEATURE_NAMES, HORIZON_MODEL_CONTRACT, MODEL_FEATURE_VERSION, _sha,
+)
 
 
 def _opportunity(**overrides):
@@ -107,6 +109,7 @@ def test_registry_rechecks_both_oos_baselines_before_promotion():
     record = {
         "status": "APPROVED_SEALED_HOLDOUT_CALIBRATED",
         "promotable": True,
+        "base_model_contract": HORIZON_MODEL_CONTRACT,
         "target": TARGET_VERSION,
         "feature_version": MODEL_FEATURE_VERSION,
         "feature_names": list(FEATURE_NAMES),
@@ -119,12 +122,14 @@ def test_registry_rechecks_both_oos_baselines_before_promotion():
             "source": "ELIGIBLE_LONG_DEVELOPMENT_ONLY",
             "observed_sl_samples": 20,
             "gross_loss_multiples": [1.0] * 20,
+            "semantics": "OHLC_SIMULATED_EXIT_VS_POSSIBLE_FILL_STOP_DISTANCE_BEFORE_COSTS",
         },
         "score_semantics": "HISTORICAL_OOS_CALIBRATED_PRELIMINARY",
         "final_holdout": {"status": "OPENED_ONCE_AFTER_PROTOCOL_FREEZE", "metrics": metrics},
         "calibration": {"approved": True, "validation_metrics": validation},
     }
     assert _approved_result(record)
+    assert not _approved_result({**record, "base_model_contract": "REGULARIZED_HORIZON_FIRST_PASSAGE_V1"})
     assert not _approved_result({**record, "execution_evidence": {}})
     assert not _approved_result({**record, "population": {"executable_entries": {"n": 0}}})
     assert not _approved_result({**record, "final_holdout": {

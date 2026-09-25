@@ -55,13 +55,21 @@ def _confidence_text(estimate, *, include_close):
         return "IC 95%: N/D (muestra insuficiente)"
 
 
-def _render_list(zones, price, estimates):
-    for zone, estimate in zip(zones, estimates):
+def _render_list(zones, price, estimates, *, compact=False):
+    for index, zone in enumerate(zones):
+        estimate = estimates[index] if index < len(estimates) else None
         low, high = _positive(zone.low), _positive(zone.high)
         level = "Sin nivel disponible" if low is None or high is None else (
             f"${_formatted(low, ',.2f')}" if low == high
             else f"${_formatted(low, ',.2f')} – ${_formatted(high, ',.2f')}")
-        st.markdown(f"**{zone.label}**  \n{level}")
+        st.markdown(f"**{level}**" if compact else f"**{zone.label}**  \n{level}")
+        if compact:
+            touch = _finite(getattr(estimate, "probability", None))
+            close = _finite(getattr(estimate, "close_probability", None))
+            direction = "debajo" if getattr(estimate, "close_direction", "") == "BELOW" else "encima"
+            st.markdown(f"**PRELIMINAR · Probabilidad estimada de toque hoy: {'N/D' if touch is None else f'{touch:.0f}%'}**")
+            st.caption(f"PRELIMINAR · Probabilidad de cierre {direction}: {'N/D' if close is None else f'{close:.0f}%'}")
+            continue
         distance = distance_to_zone(price, zone)
         proximity = "Distancia N/D" if distance is None else (
             "En zona" if distance[0] == 0 else (
@@ -80,8 +88,8 @@ def _render_list(zones, price, estimates):
             touch = 'N/D' if touch_value is None else f'{_formatted(touch_value, ".0f")}%'
             close = 'N/D' if close_value is None else f'{_formatted(close_value, ".0f")}%'
             direction = 'debajo' if getattr(estimate, 'close_direction', '') == 'BELOW' else 'encima'
-            st.markdown(f'**Probabilidad estimada de toque hoy: {touch} · PRELIMINAR**')
-            st.caption(f'Probabilidad de cierre {direction}: {close} · PRELIMINAR')
+            st.markdown(f'**PRELIMINAR · Probabilidad estimada de toque hoy: {touch}**')
+            st.caption(f'PRELIMINAR · Probabilidad de cierre {direction}: {close}')
             st.caption(_confidence_text(estimate, include_close=True))
             effective_value = _finite(getattr(estimate, "effective_samples", None))
             effective = '' if effective_value is None else f' ({_formatted(effective_value, ".1f")} efectivas)'
@@ -92,7 +100,7 @@ def _render_list(zones, price, estimates):
             st.caption(f"PRELIMINAR · Alcance hoy: N/D · {getattr(estimate, 'status', 'Estimación no disponible')}")
         else:
             probability = _finite(getattr(estimate, "probability", None))
-            st.caption(f"Probabilidad estimada de alcance hoy: {_formatted(probability, '.0f')}% · PRELIMINAR")
+            st.caption(f"PRELIMINAR · Probabilidad estimada de alcance hoy: {_formatted(probability, '.0f')}%")
             interval = _confidence_text(estimate, include_close=False)
             st.caption(
                 f"{interval} · {getattr(estimate, 'samples', 0)} sesiones · "
@@ -210,7 +218,7 @@ def render_operational_signal(analysis: "ProbabilityAnalysis", zone_snapshot) ->
         )
 
 
-def render_price_zones(analysis: "ProbabilityAnalysis", zone_snapshot=None) -> None:
+def render_price_zones(analysis: "ProbabilityAnalysis", zone_snapshot=None, *, reference_only=False) -> None:
     """Shared presentation with read-only reach estimates; no execution writes."""
     snapshot = zone_snapshot if zone_snapshot is not None else build_zone_snapshot(analysis)
     buys, sales, estimates = snapshot.buys, snapshot.sales, snapshot.estimates
@@ -223,23 +231,26 @@ def render_price_zones(analysis: "ProbabilityAnalysis", zone_snapshot=None) -> N
             current, left, right = st.columns(3, gap="small", vertical_alignment="top", border=True, wrap=False)
             with current:
                 st.markdown("**Precio actual**")
-                st.markdown(f"{analysis.symbol}  \n" + (f"${price:,.2f} USD" if price else "No disponible"))
-                try:
-                    cut = analysis.as_of.strftime("%d/%m/%Y %H:%M %Z")
-                except (AttributeError, TypeError, ValueError):
-                    cut = "N/D"
-                st.caption(f"Corte: {cut}")
-                st.caption("Último cierre de 5m disponible. Se actualiza con el motor; no es una cotización tick a tick.")
-                first_model = str(getattr(estimates[0], "model", "") or "") if estimates else ""
-                if first_model.startswith(('conditional-', 'dynamic-')):
-                    st.caption(str(getattr(estimates[0], "detail", "") or "Sin detalle estadístico disponible"))
-                    st.caption('Cierre = cierre final de hoy más allá de la zona. No equivale a una señal de compra o venta.')
+                if reference_only:
+                    st.markdown(f"${price:,.2f} USD" if price else "No disponible")
+                else:
+                    st.markdown(f"{analysis.symbol}  \n" + (f"${price:,.2f} USD" if price else "No disponible"))
+                    try:
+                        cut = analysis.as_of.strftime("%d/%m/%Y %H:%M %Z")
+                    except (AttributeError, TypeError, ValueError):
+                        cut = "N/D"
+                    st.caption(f"Corte: {cut}")
+                    st.caption("Último cierre de 5m disponible. Se actualiza con el motor; no es una cotización tick a tick.")
+                    first_model = str(getattr(estimates[0], "model", "") or "") if estimates else ""
+                    if first_model.startswith(('conditional-', 'dynamic-')):
+                        st.caption(str(getattr(estimates[0], "detail", "") or "Sin detalle estadístico disponible"))
+                        st.caption('Cierre = cierre final de hoy más allá de la zona. No equivale a una señal de compra o venta.')
             with left:
-                st.markdown("**Zona de compra / Entrada ideal**")
-                _render_list(buys, price, estimates[:3])
+                st.markdown("**Bajada**" if reference_only else "**Zona de compra / Entrada ideal**")
+                _render_list(buys, price, estimates[:3], compact=reference_only)
             with right:
-                st.markdown("**Zona de venta / Objetivos y resistencia**")
-                _render_list(sales, price, estimates[3:])
+                st.markdown("**Subida**" if reference_only else "**Zona de venta / Objetivos y resistencia**")
+                _render_list(sales, price, estimates[3:], compact=reference_only)
         extended = tuple(getattr(snapshot, "extended_levels", ()) or ())
         if not extended:
             extended = projected_extended_levels(analysis, snapshot)
@@ -250,7 +261,7 @@ def render_price_zones(analysis: "ProbabilityAnalysis", zone_snapshot=None) -> N
             if value is not None
         }
         extended = tuple(level for level in extended if round(level.price, 2) not in sale_prices)
-        if extended:
+        if extended and not reference_only:
             heading = (
                 "Soportes extendidos (Proyectados)"
                 if extended[0].direction == "BELOW"

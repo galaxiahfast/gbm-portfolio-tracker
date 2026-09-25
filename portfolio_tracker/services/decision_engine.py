@@ -282,6 +282,11 @@ def generate_decision(
         if getattr(analysis.execution_levels, "direction", "") == "LONG"
         else analysis.buy_levels
     )
+    management_stop = (
+        max(float(active_long_plan.stop_loss), float(persistent_state.get("trailing_stop") or active_long_plan.stop_loss))
+        if has_position and active_long_plan is not None and persistent_state
+        else float(active_long_plan.stop_loss) if has_position and active_long_plan is not None else None
+    )
     if exit_pending:
         # Persistent state > latest price signal: an intrabar stop/TP touch or
         # higher-timeframe invalidation cannot be undone by a recovered close.
@@ -293,6 +298,11 @@ def generate_decision(
                 active_long_plan = ExecutionLevels(**frozen_levels)
             except (TypeError, ValueError):
                 active_long_plan = None
+        if active_long_plan is not None:
+            management_stop = max(
+                float(active_long_plan.stop_loss),
+                float(persistent_state.get("trailing_stop") or active_long_plan.stop_loss),
+            )
         management = str(persistent_state.get("management") or "Salida pendiente de verificación.")
         if has_position:
             action = "CONFIRMAR_SALIDA"
@@ -301,10 +311,10 @@ def generate_decision(
         else:
             action = "ESPERAR"
             reasons.append("La salida figura pendiente, pero el libro ya no muestra acciones; reconciliar el estado antes de otra entrada.")
-    elif (has_position and active_long_plan is not None
-          and current_price <= float(active_long_plan.stop_loss)):
+    elif (has_position and management_stop is not None
+          and current_price <= management_stop):
         action = "VENDER"
-        reasons.append("El precio perforó el stop del plan persistente de la posición.")
+        reasons.append("El precio perforó el stop vigente de la posición.")
     elif (has_position and active_long_plan is not None
           and current_price >= float(active_long_plan.take_profit_1)):
         action = "VENDER"
@@ -356,7 +366,7 @@ def generate_decision(
     if has_position and active_long_plan is not None:
         entry_low = float(active_long_plan.entry_low)
         entry_high = float(active_long_plan.entry_high)
-        stop = float(active_long_plan.stop_loss)
+        stop = management_stop
         target = float(active_long_plan.take_profit_1)
         reward_risk = _rr(active_long_plan.direction, entry_high, stop, target)
 

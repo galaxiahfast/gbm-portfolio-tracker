@@ -155,6 +155,10 @@ def _minimal_signed_replay():
                 "outcome": "TIMEOUT",
                 "exit_at": "2026-09-01T16:00:00+00:00",
             },
+            "execution_result": {
+                "version": "SESSION_LIMIT_POSSIBLE_FILL_V1",
+                "status": "NOT_AUTHORIZED",
+            },
         })
     cut = {
         "cut_id": "cut-1",
@@ -234,6 +238,22 @@ def _replay_with_population(eligible_indices=(), symbol="SMCI"):
                 "exit_price": (104.0 if index % 2 == 0 else 97.0),
                 "exit_at": (observed + pd.Timedelta(hours=1)).isoformat(),
             })
+            if index in eligible_indices:
+                # A signed replay must show a possible fill before an
+                # operational result can enter the training population.
+                exit_price = 104.0 if index % 2 == 0 else 97.0
+                horizon["execution_result"] = {
+                    "version": "SESSION_LIMIT_POSSIBLE_FILL_V1",
+                    "status": "SIMULATED_RESOLVED",
+                    "outcome": "TP_FIRST" if index % 2 == 0 else "SL_FIRST",
+                    "fill_price": 100.0,
+                    "fill_at": (observed + pd.Timedelta(minutes=5)).isoformat(),
+                    "exit_price": exit_price,
+                    "exit_at": (observed + pd.Timedelta(hours=1)).isoformat(),
+                    "net_pnl_per_share": (
+                        (exit_price - 100.0) - 0.0032 * (100.0 + exit_price)
+                    ),
+                }
             horizon["model_feature_contract"] = model_feature_contract(
                 {"feature_snapshot": cut["feature_snapshot"]}, horizon,
             )
@@ -283,7 +303,7 @@ def test_only_eligible_entries_contribute_class_hits_and_net_expectancy():
         "TP_FIRST": 1, "SL_FIRST": 1, "TIMEOUT": 0,
     }
     assert report["executable_entries"]["net_wins"] == 1
-    assert report["executable_entries"]["net_expectancy_per_share"] == pytest.approx(-0.1015)
+    assert report["executable_entries"]["net_expectancy_per_share"] == pytest.approx(-0.1416)
     assert len(horizon_samples(replay, "1 Hora")) == 2
     rejected = train_horizon_samples("1 Hora", (
         replace(row, eligible_at_emission=False) for row in _samples()

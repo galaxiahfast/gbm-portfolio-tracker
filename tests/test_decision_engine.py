@@ -12,7 +12,8 @@ from streamlit.testing.v1 import AppTest
 
 from portfolio_tracker.analytics.expected_value import calculate_expectation
 from portfolio_tracker.analytics.horizon_models import (
-    FEATURE_NAMES, MODEL_FEATURE_VERSION, _sha, model_feature_contract,
+    FEATURE_NAMES, HORIZON_MODEL_CONTRACT, MODEL_FEATURE_VERSION,
+    _sha, model_feature_contract,
 )
 from portfolio_tracker.analytics.operational_target import TARGET_VERSION
 from portfolio_tracker.analytics.horizon_selector import select_best_horizon
@@ -53,6 +54,7 @@ def _approved_operational_result(horizon, probabilities):
         "horizon": horizon,
         "status": "APPROVED_SEALED_HOLDOUT_CALIBRATED",
         "promotable": True,
+        "base_model_contract": HORIZON_MODEL_CONTRACT,
         "target": TARGET_VERSION,
         "resolved_samples": 330,
         "minimum_samples_required": 300,
@@ -63,7 +65,7 @@ def _approved_operational_result(horizon, probabilities):
             "observed_sl_samples": 30,
             "gap_samples": 1,
             "gross_loss_multiples": [1.0] * 29 + [1.5],
-            "semantics": "OBSERVED_EXIT_VS_FROZEN_STOP_DISTANCE_BEFORE_FILL_COSTS",
+            "semantics": "OHLC_SIMULATED_EXIT_VS_POSSIBLE_FILL_STOP_DISTANCE_BEFORE_COSTS",
         },
         "score_semantics": "HISTORICAL_OOS_CALIBRATED_PRELIMINARY",
         "feature_names": list(FEATURE_NAMES),
@@ -234,8 +236,7 @@ r = repository(Path(tempfile.mkdtemp()))
 render_system_decision(generate_decision("SMCI", analysis=a, repository=r, operational_models={}, inference_at=ACTIONABLE_AT))
 ''').run(timeout=30)
     assert not app.exception
-    assert any("FALTA DE EVIDENCIA" in item.value for item in app.warning)
-    assert any("sin evidencia de entradas ejecutables" in item.value.lower() for item in app.warning)
+    assert not app.metric  # No real holding: the compact position panel is absent.
 
 
 def test_approved_artifact_with_299_forward_entries_cannot_buy(tmp_path):
@@ -441,11 +442,7 @@ s = build_zone_snapshot(a, now="2026-09-04T16:25:00Z")
 render_system_decision(generate_decision("SMCI", analysis=a, repository=r, zone_snapshot=s))
 ''').run(timeout=30)
     assert not app.exception
-    assert "DECISIÓN DEL SISTEMA" in "\n".join(item.value for item in app.markdown)
-    assert "Condiciones de activación LONG" in "\n".join(item.value for item in app.markdown)
-    labels = [item.label for item in app.metric]
-    assert "EV neta observada/realista · por acción" in labels
-    assert "EV neta teórica · por acción" in labels
+    assert not app.metric  # Only receipt-backed positions get a four-value card.
 
     text = "\n".join(
         page.extract_text() or ""

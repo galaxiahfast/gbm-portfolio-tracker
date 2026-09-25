@@ -1,8 +1,8 @@
 {
-  "ciphertext_sha256": "1ce9aaf95829dc0820e1e86fc8e938db2be1635ba4f8a816f4ef81020d026ffe",
-  "created_at": "2026-09-23T23:00:01.404566+00:00",
-  "encrypted_bytes": 7544881,
+  "ciphertext_sha256": "51383bca584fcc4be7e34b0a5bb7e841810c30d6e262884ebe07ec1d8ac3fa0b",
+  "created_at": "2026-09-24T23:00:02.208602+00:00",
+  "encrypted_bytes": 8306737,
   "format": "GBM-SQLITE-AESGCM-v1",
-  "schema_migration": 12,
+  "schema_migration": 13,
   "sqlite_user_version": 0
 }

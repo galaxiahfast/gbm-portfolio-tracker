@@ -79,7 +79,7 @@ CREATE TABLE live_model_observations (
     outcome_up INTEGER,
     successful INTEGER,
     resolved_at TEXT,
-    created_at TEXT NOT NULL, integrity_version INTEGER NOT NULL DEFAULT 1, available_at TEXT, source_bar_at TEXT, horizon_policy TEXT, resolution_status TEXT NOT NULL DEFAULT 'LEGACY_UNVERIFIED', outcome_bar_at TEXT, outcome_source TEXT, resolution_sha256 TEXT,
+    created_at TEXT NOT NULL, integrity_version INTEGER NOT NULL DEFAULT 1, available_at TEXT, source_bar_at TEXT, horizon_policy TEXT, resolution_status TEXT NOT NULL DEFAULT 'LEGACY_UNVERIFIED', outcome_bar_at TEXT, outcome_source TEXT, resolution_sha256 TEXT, anchor_version TEXT,
     UNIQUE(symbol, observed_at, horizon_minutes)
 );
 
@@ -262,7 +262,7 @@ CREATE INDEX ix_zone_pending ON zone_prediction_log(resolved_at, expires_at);
 
 CREATE TRIGGER live_forecast_immutable
             BEFORE UPDATE ON live_model_observations
-            WHEN OLD.integrity_version >= 2 AND (NEW.symbol IS NOT OLD.symbol OR NEW.observed_at IS NOT OLD.observed_at OR NEW.available_at IS NOT OLD.available_at OR NEW.horizon_minutes IS NOT OLD.horizon_minutes OR NEW.reference_price IS NOT OLD.reference_price OR NEW.raw_probability_up IS NOT OLD.raw_probability_up OR NEW.predicted_direction IS NOT OLD.predicted_direction OR NEW.parameters_json IS NOT OLD.parameters_json OR NEW.source_bar_at IS NOT OLD.source_bar_at OR NEW.horizon_policy IS NOT OLD.horizon_policy OR NEW.integrity_version IS NOT OLD.integrity_version OR NEW.created_at IS NOT OLD.created_at OR NEW.observation_sha256 IS NOT OLD.observation_sha256 OR NEW.id IS NOT OLD.id)
+            WHEN OLD.integrity_version >= 2 AND (NEW.symbol IS NOT OLD.symbol OR NEW.observed_at IS NOT OLD.observed_at OR NEW.available_at IS NOT OLD.available_at OR NEW.horizon_minutes IS NOT OLD.horizon_minutes OR NEW.reference_price IS NOT OLD.reference_price OR NEW.raw_probability_up IS NOT OLD.raw_probability_up OR NEW.predicted_direction IS NOT OLD.predicted_direction OR NEW.parameters_json IS NOT OLD.parameters_json OR NEW.source_bar_at IS NOT OLD.source_bar_at OR NEW.horizon_policy IS NOT OLD.horizon_policy OR NEW.integrity_version IS NOT OLD.integrity_version OR NEW.created_at IS NOT OLD.created_at OR NEW.anchor_version IS NOT OLD.anchor_version OR NEW.observation_sha256 IS NOT OLD.observation_sha256 OR NEW.id IS NOT OLD.id)
             BEGIN SELECT RAISE(ABORT, 'live_forecast_immutable'); END;
 
 CREATE TRIGGER live_observation_no_delete

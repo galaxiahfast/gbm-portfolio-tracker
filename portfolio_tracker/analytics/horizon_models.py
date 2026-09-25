@@ -25,13 +25,14 @@ import numpy as np
 import pandas as pd
 
 from .historical_replay import validate_historical_replay
+from .execution_path import EXECUTION_VERSION
 from .operational_target import TARGET_VERSION
 from .net_expectation import TradingCostPolicy
 from ..services.directional_collection import HORIZON_MINUTES
 from ..services.model_observations import canonical
 
 
-HORIZON_MODEL_CONTRACT = "REGULARIZED_HORIZON_FIRST_PASSAGE_V1"
+HORIZON_MODEL_CONTRACT = "REGULARIZED_HORIZON_EXECUTION_PATH_V2"
 MODEL_FEATURE_VERSION = "OPERATIONAL_TECHNICAL_FEATURES_V2"
 TARGET_CLASSES = ("TP_FIRST", "SL_FIRST", "TIMEOUT")
 PROFESSIONAL_MINIMUM_SAMPLES = 300
@@ -276,12 +277,11 @@ def _observed_stop_loss_multiple(contract: Mapping, result: Mapping) -> float | 
 
 
 def _replay_labeled_samples(replay: Mapping, horizon_label: str) -> tuple[HorizonSample, ...]:
-    """All resolved hypothetical barriers; eligibility is frozen at emission."""
+    """Keep hypothetical barriers separate from simulated possible fills."""
 
     validate_historical_replay(dict(replay))
     if horizon_label not in HORIZON_MINUTES:
         raise ValueError(f"Horizonte desconocido: {horizon_label}.")
-    cost_rate = TradingCostPolicy().rate_per_side
     rows = []
     for cut in replay.get("observations", ()):
         matches = [row for row in cut.get("horizons", ()) if row.get("label") == horizon_label]
@@ -290,22 +290,35 @@ def _replay_labeled_samples(replay: Mapping, horizon_label: str) -> tuple[Horizo
         horizon = matches[0]
         contract = horizon.get("operational_contract") or {}
         result = horizon.get("operational_result") or {}
-        outcome = result.get("outcome")
-        available = result.get("exit_at")
-        if result.get("status") != "RESOLVED" or outcome not in TARGET_CLASSES or not available:
+        hypothetical_outcome = result.get("outcome")
+        if (result.get("status") != "RESOLVED"
+                or hypothetical_outcome not in TARGET_CLASSES or not result.get("exit_at")):
             continue
+        execution = horizon.get("execution_result") or {}
+        possible_fill = (
+            contract.get("eligible_at_emission") is True
+            and execution.get("status") == "SIMULATED_RESOLVED"
+            and execution.get("version") == EXECUTION_VERSION
+            and execution.get("outcome") in TARGET_CLASSES
+            and execution.get("fill_at") and execution.get("exit_at")
+            and execution.get("net_pnl_per_share") is not None
+        )
+        outcome = execution["outcome"] if possible_fill else hypothetical_outcome
+        available = execution["exit_at"] if possible_fill else result["exit_at"]
         observed = pd.Timestamp(cut.get("observed_at"))
         known = pd.Timestamp(available)
         if pd.isna(observed) or pd.isna(known) or observed.tzinfo is None or known.tzinfo is None:
             raise ValueError("Timestamps del replay deben ser timezone-aware.")
         if known < observed:
             raise ValueError("Una etiqueta no puede conocerse antes de la predicción.")
-        net_pnl = _net_replay_pnl(contract, result, cost_rate)
-        sl_multiple = _observed_stop_loss_multiple(contract, result)
-        # Missing/invalid entry or exit cannot become an executable training
-        # sample even if a historical artifact marked its trigger as true.
-        eligible = (contract.get("eligible_at_emission") is True and net_pnl is not None
-                    and (outcome != "SL_FIRST" or sl_multiple is not None))
+        net_pnl = float(execution["net_pnl_per_share"]) if possible_fill else None
+        if net_pnl is not None and not math.isfinite(net_pnl):
+            raise ValueError("P&L de ejecución no finito.")
+        filled_contract = {**contract, "entry_price": execution.get("fill_price")} if possible_fill else contract
+        sl_multiple = _observed_stop_loss_multiple(filled_contract, execution) if possible_fill else None
+        # A signed barrier hit without a later possible entry fill remains a
+        # hypothesis, never a trainable trading outcome.
+        eligible = bool(possible_fill and (outcome != "SL_FIRST" or sl_multiple is not None))
         feature_contract = model_feature_contract(cut, horizon)
         declared = horizon.get("model_feature_contract")
         if eligible and (declared != feature_contract
@@ -323,7 +336,7 @@ def _replay_labeled_samples(replay: Mapping, horizon_label: str) -> tuple[Horizo
             feature_version=feature_contract["version"],
             available_features=tuple(feature_contract["available_features"]),
             sl_loss_multiple=sl_multiple if eligible else None,
-            sl_exit_source=str(result.get("exit_source") or "") if eligible and outcome == "SL_FIRST" else None,
+            sl_exit_source=str(execution.get("exit_source") or "") if eligible and outcome == "SL_FIRST" else None,
             entry_side=str(contract.get("side") or ""),
         ))
     rows.sort(key=lambda item: item.observed_at)
@@ -344,6 +357,18 @@ def horizon_samples(replay: Mapping, horizon_label: str) -> tuple[HorizonSample,
 def replay_population_report(replay: Mapping, horizon_label: str) -> dict:
     """Keep hypothetical barrier frequencies separate from executable outcomes."""
     hypothetical = _replay_labeled_samples(replay, horizon_label)
+    raw_barrier_counts = {name: 0 for name in TARGET_CLASSES}
+    entry_status_counts = {}
+    for cut in replay.get("observations", ()):
+        horizon = next((item for item in cut.get("horizons", ())
+                        if item.get("label") == horizon_label), None)
+        if horizon is None:
+            continue
+        barrier = horizon.get("operational_result") or {}
+        if barrier.get("status") == "RESOLVED" and barrier.get("outcome") in raw_barrier_counts:
+            raw_barrier_counts[barrier["outcome"]] += 1
+        status = (horizon.get("execution_result") or {}).get("status", "NO_EXECUTION_ASSESSMENT")
+        entry_status_counts[status] = entry_status_counts.get(status, 0) + 1
     eligible = tuple(row for row in hypothetical if row.eligible_at_emission)
     current = tuple(
         row for row in eligible
@@ -361,12 +386,13 @@ def replay_population_report(replay: Mapping, horizon_label: str) -> dict:
     }
     return {
         "barrier_hypotheses": {
-            "resolved_n": len(hypothetical),
-            "class_counts": _class_counts(hypothetical),
+            "resolved_n": sum(raw_barrier_counts.values()),
+            "class_counts": raw_barrier_counts,
             "meaning": "Resultado de barreras hipotéticas; no mide entradas ejecutables.",
         },
         "executable_entries": {
             "n": len(eligible),
+            "entry_status_counts": dict(sorted(entry_status_counts.items())),
             "class_hits": _class_counts(eligible),
             "class_performance": class_performance,
             "net_wins": sum(value > 0 for value in profits),
@@ -374,7 +400,7 @@ def replay_population_report(replay: Mapping, horizon_label: str) -> dict:
                 round(sum(profits) / len(profits), 8) if profits else None
             ),
             "cost_rate_per_side": TradingCostPolicy().rate_per_side,
-            "meaning": "Entrada autorizada en emisión; P&L simulado sin fill real.",
+            "meaning": "Entrada autorizada y fill posible por OHLC; P&L neto simulado, no fill real.",
         },
         "trainable_current_target_n": len(current),
         "excluded_legacy_target_n": len(eligible) - len(current),

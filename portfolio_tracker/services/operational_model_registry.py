@@ -16,7 +16,8 @@ from portfolio_tracker.analytics.nested_walk_forward import (
     validate_nested_walk_forward_artifact,
 )
 from portfolio_tracker.analytics.horizon_models import (
-    FEATURE_NAMES, MODEL_FEATURE_VERSION, PROFESSIONAL_MINIMUM_SAMPLES, _sha,
+    FEATURE_NAMES, HORIZON_MODEL_CONTRACT, MODEL_FEATURE_VERSION,
+    PROFESSIONAL_MINIMUM_SAMPLES, _sha,
 )
 from portfolio_tracker.analytics.operational_target import TARGET_VERSION
 
@@ -35,6 +36,7 @@ def _strict_improvement(candidate, reference) -> bool:
 def _approved_result(row) -> bool:
     if (row.get("status") != "APPROVED_SEALED_HOLDOUT_CALIBRATED"
             or row.get("promotable") is not True
+            or row.get("base_model_contract") != HORIZON_MODEL_CONTRACT
             or row.get("target") != TARGET_VERSION
             or row.get("feature_version") != MODEL_FEATURE_VERSION
             or row.get("feature_names") != list(FEATURE_NAMES)
@@ -59,6 +61,7 @@ def _approved_result(row) -> bool:
     stop_evidence = row.get("execution_evidence") or {}
     multiples = stop_evidence.get("gross_loss_multiples") or ()
     if (stop_evidence.get("source") != "ELIGIBLE_LONG_DEVELOPMENT_ONLY"
+            or stop_evidence.get("semantics") != "OHLC_SIMULATED_EXIT_VS_POSSIBLE_FILL_STOP_DISTANCE_BEFORE_COSTS"
             or stop_evidence.get("observed_sl_samples") != len(multiples)
             or len(multiples) < 20):
         return False

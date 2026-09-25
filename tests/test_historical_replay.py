@@ -81,6 +81,7 @@ def test_historical_replay_builds_one_signed_six_horizon_cut(replay_payload):
     assert one_hour["scenario_result"]["status"] == "RESOLVED"
     assert one_hour["operational_result"]["status"] == "RESOLVED"
     assert one_hour["operational_result"]["outcome"] in {"TP_FIRST", "SL_FIRST", "TIMEOUT"}
+    assert one_hour["execution_result"]["version"] == "SESSION_LIMIT_POSSIBLE_FILL_V1"
     six_months = next(item for item in cut["horizons"] if item["label"] == "6 Meses")
     assert six_months["scenario_result"]["status"] == "RIGHT_CENSORED"
 
@@ -113,3 +114,11 @@ def test_historical_replay_artifact_is_atomic_and_tamper_evident(tmp_path, repla
     stored["observations"][0]["horizons"][0]["prediction"]["probability_up"] = 99.0
     with pytest.raises(ValueError, match="Firma de corte"):
         validate_historical_replay(stored)
+
+
+def test_execution_assessment_is_inside_signed_replay(replay_payload):
+    from copy import deepcopy
+    altered = deepcopy(replay_payload)
+    altered["observations"][0]["horizons"][0]["execution_result"]["status"] = "SIMULATED_RESOLVED"
+    with pytest.raises(ValueError, match="Firma de corte"):
+        validate_historical_replay(altered)

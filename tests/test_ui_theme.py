@@ -51,11 +51,26 @@ def test_quant_minimal_theme_is_scoped_and_preserves_risk_content() -> None:
     assert 'filter: grayscale(1)' in PREMIUM_CSS
 
 
-def test_secondary_panels_collapse_without_lazy_computation_gates() -> None:
+def test_secondary_panels_hide_distractions_without_removing_calculations() -> None:
     source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
-    for label in ("Condiciones de activación", "Plan de ejecución detallado",
-                  "Patrones y estructuras", "Fundamentales y noticias", "Estado de datos y calibración"):
+    for label in ("Condiciones de activación", "Plan de ejecución detallado"):
         assert f'st.expander("{label}", expanded=False)' in source
+    assert 'st.expander("Patrones y estructuras"' not in source
+    assert '_render_chart_patterns(analysis, compact=' not in source
+    assert 'render_price_zones(analysis, zone_snapshot=zone_snapshot, reference_only=True)' in source
+    predictor = source.split("def _probability_predictor_content", 1)[1].split(
+        "def probability_predictor_page", 1
+    )[0]
+    assert 'st.expander("Estado de datos y calibración"' not in predictor
+    assert 'st.expander("Fundamentales y noticias"' not in predictor
+    assert 'render_cross_asset(analysis)' not in predictor
+    assert '_render_fundamental_news(analysis' not in predictor
+    assert 'st.multiselect("Emisoras"' not in predictor
+    assert 'enrich_cross_asset(analysis' in predictor
+    assert 'apply_fundamental_filter(analysis' in predictor
+    assert 'calibrate_scenarios(contract' in predictor
+    assert 'latest_approved_operational_models(' in predictor
+    assert '"Activos del motor cuantitativo"' in source
     assert 'key="quant_core_metrics"' in source
     assert 'key="quant_buy_zone"' in source
     assert 'key="quant_sell_zone"' in source

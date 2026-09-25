@@ -16,7 +16,6 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from portfolio_tracker.services.cross_asset import enrich_cross_asset, prefetch_cross_asset
-from portfolio_tracker.ui.cross_asset import render_cross_asset
 
 from portfolio_tracker.analytics.backtesting import (
     BacktestBatchResult,
@@ -108,6 +107,7 @@ from portfolio_tracker.services.price_zones import build_visual_zone_snapshot
 from portfolio_tracker.services.decision_engine import generate_decision
 from portfolio_tracker.services.operational_model_registry import latest_approved_operational_models
 from portfolio_tracker.services.operational_validation import validation_disclosure
+from portfolio_tracker.services.intraday_plan import build_intraday_plan
 
 
 st.set_page_config(
@@ -1057,6 +1057,7 @@ def _render_probability_executive(
     zone_snapshot=None,
     system_decision=None,
     validation_status=None,
+    intraday_plan=None,
 ) -> None:
     """Panel de decisión breve; no vuelve a consultar ni recalcula datos de mercado."""
 
@@ -1066,10 +1067,10 @@ def _render_probability_executive(
     decision_tone = decision.tone
     levels = analysis.execution_levels
     if system_decision is not None:
-        render_system_decision(system_decision)
+        render_system_decision(system_decision, intraday_plan=intraday_plan, current_price=analysis.last_price)
     else:
         render_operational_signal(analysis, zone_snapshot)
-    render_price_zones(analysis, zone_snapshot=zone_snapshot)
+    render_price_zones(analysis, zone_snapshot=zone_snapshot, reference_only=True)
     legacy_zones_slot = st.empty()
     with legacy_zones_slot.container():
         if analysis.buy_levels is not None and analysis.sell_levels is not None:
@@ -1208,9 +1209,6 @@ def _render_probability_executive(
         )
 
     legacy_metrics_slot.empty()
-    with st.expander("Patrones y estructuras", expanded=False):
-        _render_chart_patterns(analysis, compact=True)
-
     ordered_projections = ordered_horizon_projections(analysis.horizon_projections)
     preliminary = bool(validation_status and validation_status["preliminary"])
     provisional = " · PRELIMINAR" if preliminary else ""
@@ -1516,7 +1514,7 @@ def _render_chart_patterns(
 def _probability_predictor_content(*, live_mode: bool) -> None:
     page_intro(
         "Motor cuantitativo · Fase 5",
-        "Scores multi-temporales, calibración empírica y veto central de riesgo.",
+        "Análisis de mercado y niveles operativos.",
     )
     validation_slot = st.empty()
     # El contenedor conserva esta posición aunque los bytes se generen después.
@@ -1543,20 +1541,14 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
             validation_panel(repository, forward_status)
         return  # Validation remains accessible if live analysis/data are unavailable.
 
-    with st.expander("Emisora", expanded=False):
-        st.session_state.setdefault("predictor_symbol", "SMCI")
-        st.session_state.setdefault("predictor_symbol_input", st.session_state["predictor_symbol"])
-        symbol_input = st.text_input(
-            "Emisora", key="predictor_symbol_input", placeholder="SMCI",
-            help="Escribe el ticker y presiona Enter. El análisis se actualiza automáticamente.",
-        )
-        try:
-            symbol = normalize_symbol(symbol_input)
-        except QuantMarketDataError as exc:
-            st.error(str(exc))
-            return
-        st.session_state["predictor_symbol"] = symbol
-        st.caption("El análisis carga al entrar y se renueva cada 5 minutos durante la sesión.")
+    # La selección vive en Configuración; el análisis continúa usando el
+    # símbolo guardado en esta sesión, sin añadir controles al panel operativo.
+    try:
+        symbol = normalize_symbol(st.session_state.setdefault("predictor_symbol", "SMCI"))
+    except QuantMarketDataError as exc:
+        st.error(str(exc))
+        return
+    st.session_state["predictor_symbol"] = symbol
 
     output = st.container()
     from portfolio_tracker.analytics.backtesting import ENGINE_VERSION
@@ -1734,70 +1726,8 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
     validation_status = validation_disclosure(validation_counts, set(approved_models))
     render_validation_banner(validation_status, validation_slot)
 
-    with st.expander("Estado de datos y calibración", expanded=False):
-        with st.container(horizontal=True, vertical_alignment="center"):
-            st.badge(
-                "Mercado EUA abierto · datos retrasados"
-                if live_mode and freshness_issue else
-                "Mercado EUA abierto · actualización cada 5 min"
-                if live_mode else "Mercado EUA cerrado · último corte disponible",
-                color="orange" if freshness_issue else "green" if live_mode else "gray",
-                icon=":material/sync:" if live_mode and not freshness_issue else ":material/schedule:",
-            )
-            st.caption(
-                f"Diagnóstico direccional: {online_stats['resolved']} filas · "
-                f"acierto por fila {online_stats['accuracy']:.1%}. "
-                "Estas filas comparten eventos entre horizontes: no son operaciones independientes "
-                "y no se usan para decidir."
-            )
-            st.caption(
-                f"Cobertura sin duplicar: {operational_coverage['tp_first_events']} TP primero "
-                f"en {operational_coverage['resolved_events']} eventos independientes "
-                f"({operational_coverage['horizon_resolutions']} resoluciones por horizonte). "
-                f"Muestra: {operational_coverage['verified_cuts']} cortes firmados recientes. "
-                "Son barreras hipotéticas, no operaciones ejecutadas."
-            )
-            st.badge(
-                analysis.probability_status,
-                color=(
-                    "green"
-                    if analysis.probability_status.startswith("Probabilidad empíricamente")
-                    else "orange"
-                ),
-                icon=":material/science:",
-            )
-        if fundamental_warning:
-            st.warning(fundamental_warning)
-
-        st.caption(
-            "Escenarios de cierre al vencimiento: subida por encima del techo, rango entre límites "
-            "(inclusive), bajada bajo el piso. Brier multiclase OOS en [0,2]; no equivale al Brier binario. "
-            "El score operativo global permanece heurístico y no utiliza el calibrador de otro horizonte."
-        )
-        st.dataframe([
-            {"Horizonte": h.label, "Estado": h.probability_status,
-             "Validación operativa": next(
-                 row["status"] for row in validation_status["rows"] if row["horizon"] == h.label
-             ),
-             "Entradas elegibles / 300": validation_counts[h.label]["eligible"],
-             "Entrenamiento": h.calibration_training_samples, "Calibración": h.calibration_fit_samples,
-             "Holdout": h.calibration_holdout_samples, "Purgadas": h.calibration_excluded,
-             "Brier OOS": h.brier_score, "Brier crudo OOS": h.raw_brier_score,
-             "Baseline OOS": h.baseline_brier_score}
-            for h in analysis.horizon_projections
-        ], hide_index=True)
-        reliability_rows = [
-            {"Horizonte": label, "Clase": class_name,
-             "Predicción media OOS": point.predicted_mean,
-             "Frecuencia observada OOS": point.observed_frequency,
-             "Muestras OOS": point.samples}
-            for label, result in calibration_results.items()
-            for class_name, curve in zip(("Subida", "Rango", "Bajada"), result.reliability_curves)
-            for point in curve
-        ]
-        if reliability_rows:
-            st.caption("Reliability curves: comparación por intervalos, exclusivamente en holdout.")
-            st.dataframe(reliability_rows, hide_index=True)
+    # Los diagnósticos, calibradores y contextos permanecen calculados arriba;
+    # solo se omite su panel secundario para no distraer del plan operativo.
 
     # Vista y PDFs: transformación dinámica exclusivamente en memoria. La única
     # escritura de zone_prediction_log pertenece al colector headless de las 11 NY.
@@ -1807,6 +1737,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         )
     else:
         zone_snapshot = build_visual_zone_snapshot(analysis, repository=repository)
+    intraday_plan = build_intraday_plan(analysis, repository)
     system_decision = generate_decision(
         analysis.symbol, analysis=analysis, repository=repository,
         zone_snapshot=zone_snapshot,
@@ -1883,15 +1814,11 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                 zone_snapshot=zone_snapshot,
                 system_decision=system_decision,
                 validation_status=validation_status,
+                intraday_plan=intraday_plan,
             )
-            render_cross_asset(analysis)
-            with st.expander("Fundamentales y noticias", expanded=False):
-                _render_fundamental_news(analysis, fundamental_snapshot, compact=True)
     if technical_tab.open:
         with technical_tab:
             render_price_zones(analysis, zone_snapshot=zone_snapshot)
-            render_cross_asset(analysis)
-            _render_fundamental_news(analysis, fundamental_snapshot, compact=False)
             signal_labels = {
                 TechnicalSignal.HOLD_LONG: "Posición LONG activa",
                 TechnicalSignal.HOLD_SHORT: "Posición SHORT activa",
@@ -2089,8 +2016,6 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
                     delta_color="off",
                     border=True,
                 )
-
-            _render_chart_patterns(analysis, compact=False)
 
             if analysis.risk_veto:
                 st.error(analysis.risk_alert)
@@ -2592,18 +2517,13 @@ def backtesting_page(
         "el histórico probado; no garantiza rendimiento futuro."
     )
     account_capital, ledger_commission_bps, holdings = _backtest_account_defaults(repository)
-    available = sorted(set(["TSLA", "NVDA", "SMCI", "GME"] + holdings))
     defaults = sorted(set(["TSLA", "NVDA", "SMCI", "GME"] + holdings))
 
     with st.form("backtesting_configuration", border=True):
         st.subheader("Configuración reproducible", anchor=False)
-        symbols = st.multiselect(
-            "Emisoras",
-            available,
-            default=defaults,
-            accept_new_options=True,
-            help="Incluye automáticamente las posiciones registradas en el libro local.",
-        )
+        # Universo configurable en Configuración; las posiciones reales siempre
+        # se incluyen como antes sin mostrar otro selector en este módulo.
+        symbols = sorted(set(st.session_state.get("backtest_symbols", defaults)) | set(holdings))
         first, second, third = st.columns(3)
         period = first.selectbox("Datos del replay", ["5m: 1 mes / diario: 5 años"])
         st.caption("Las señales se reproducen con velas reales de 5m. Los 5 años diarios solo aportan contexto; no amplían la muestra intradía. Sin evidencia OOS suficiente no se promoverán parámetros.")
@@ -2884,6 +2804,34 @@ def settings_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> 
         "Configuración",
         "Fuentes de mercado, calibración manual y estado del almacenamiento local.",
     )
+    with st.container(border=True):
+        st.subheader("Activos del motor cuantitativo", anchor=False)
+        _, _, held_symbols = _backtest_account_defaults(repository)
+        default_universe = sorted(set(["TSLA", "NVDA", "SMCI", "GME"] + held_symbols))
+        st.session_state.setdefault("backtest_symbols", default_universe)
+        available_universe = sorted(set(default_universe) | set(st.session_state["backtest_symbols"]))
+        with st.form("quant_symbol_settings", border=False):
+            predictor_symbol = st.text_input(
+                "Activo del análisis", value=st.session_state.get("predictor_symbol", "SMCI"),
+                help="El Motor cuantitativo utilizará este ticker al abrirse.",
+            )
+            backtest_symbols = st.multiselect(
+                "Universo del backtest", available_universe,
+                default=st.session_state["backtest_symbols"], accept_new_options=True,
+                help="Las posiciones registradas se incluirán siempre en el backtest.",
+            )
+            save_symbols = st.form_submit_button("Guardar activos")
+        if save_symbols:
+            try:
+                selected_symbol = normalize_symbol(predictor_symbol)
+                selected_universe = sorted({normalize_symbol(item) for item in backtest_symbols})
+            except QuantMarketDataError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state["predictor_symbol"] = selected_symbol
+                st.session_state["backtest_symbols"] = selected_universe
+                st.toast("Activos del motor guardados para esta sesión")
+
     with st.container(border=True):
         st.subheader("Tipo de cambio USD/MXN", anchor=False)
         if fx_quote:

@@ -91,5 +91,6 @@ _render_list(zones, 100., estimates)
     assert not app.exception
     values = [c.value for c in app.caption if 'Probabilidad estimada' in c.value]
     assert len(values) == 6
+    assert all('PRELIMINAR' in value for value in values)
     assert [v.rsplit(': ', 1)[1] for v in values] == ['100%', '0%', '0%', '100%', '0%', '0%']
     assert not any('contexto' in c.value for c in app.caption)

@@ -106,6 +106,24 @@ render_price_zones(_analysis())
     assert "Zona de venta / Objetivos y resistencia" in text
 
 
+def test_executive_reference_view_shows_current_price_and_three_levels_per_direction():
+    app = AppTest.from_string('''
+from portfolio_tracker.ui.price_zones import render_price_zones
+from tests.test_pdf_report import _analysis
+render_price_zones(_analysis(), reference_only=True)
+''', default_timeout=30).run()
+    assert not app.exception
+    text = "\n".join(item.value for item in app.markdown)
+    captions = "\n".join(item.value for item in app.caption)
+    assert "Precio actual" in text
+    assert "Bajada" in text and "Subida" in text
+    assert text.count("Probabilidad estimada de toque hoy") == 6
+    assert captions.count("Probabilidad de cierre") == 6
+    for removed in ("Zona 1", "IC 95%", "Distancia", "ATR consumido",
+                    "Soporte técnico más cercano", "Cierre = cierre final"):
+        assert removed not in text + captions
+
+
 def test_three_panels_use_shared_typography_and_hide_old_metrics():
     assert '.st-key-quant_core_metrics,\n.st-key-quant_legacy_zones {\n  display: none !important;' in PREMIUM_CSS
     assert '--quant-panel-font-size: .875rem' in PREMIUM_CSS

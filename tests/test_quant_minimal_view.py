@@ -41,7 +41,8 @@ from tests.test_pdf_report import _analysis
         assert removed not in labels
     text = "\n".join(item.value for item in app.markdown)
     assert "Precio actual" in text
-    assert "Zona 1" in text and "TP1 · Primer objetivo" in text
+    assert "Bajada" in text and "Subida" in text
+    assert text.count("Probabilidad estimada de toque hoy") == 6
     assert "Stop loss técnico" in labels
     for expander in app.expander:
         assert not expander.proto.expanded

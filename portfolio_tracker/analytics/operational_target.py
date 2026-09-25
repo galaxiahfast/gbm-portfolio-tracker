@@ -67,6 +67,9 @@ class OperationalScan:
     scanned_through: str | None
     evidence_sha256: str
     evidence_count: int
+    # Transient, already-validated rows processed in this scan. The repository
+    # advances the separate possible-fill state from exactly this causal path.
+    observed_bars: tuple = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +108,7 @@ def _finite_price(value, name):
 
 def make_operational_contract(symbol, horizon, horizon_minutes, analysis, observed_at, parameters):
     """Freeze one hypothetical trade plan before any outcome is known."""
+    from .execution_path import frozen_execution_terms
     observed = utc_timestamp(observed_at)
     entry_at = utc_timestamp(analysis.source_bar_closed_at)
     evaluation_start = first_evaluable_open(observed)
@@ -160,6 +164,7 @@ def make_operational_contract(symbol, horizon, horizon_minutes, analysis, observ
         "evaluation_starts_at": evaluation_start.isoformat(),
         "timeout_at": timeout.isoformat(),
         "entry_policy": ENTRY_POLICY, "same_bar_policy": SAME_BAR_POLICY,
+        "execution_terms": frozen_execution_terms(observed),
         "eligible_at_emission": eligible and is_actionable_emission(observed, entry_at),
     }
     contract["contract_sha256"] = hashlib.sha256(canonical(contract).encode()).hexdigest()
@@ -225,6 +230,9 @@ def validate_operational_contract(contract):
         raise ValueError("Una emisión fuera de corte no puede ser operativa.")
     if contract.get("entry_policy") != ENTRY_POLICY or contract.get("same_bar_policy") != SAME_BAR_POLICY:
         raise ValueError("Política de ejecución operativa desconocida.")
+    if "execution_terms" in contract:
+        from .execution_path import validate_execution_terms
+        validate_execution_terms(contract["execution_terms"], observed)
     return scores
 
 
@@ -382,6 +390,7 @@ def scan_operational_outcome(
     side = normalized["side"]
     stop, target = float(normalized["stop_loss"]), float(normalized["take_profit"])
     count = prior_count
+    processed = []
     scanned_through = scan_start.isoformat() if resume_at is not None else None
     for start, end, opening, high, low, close, volume, source in evidence:
         record = {
@@ -391,43 +400,44 @@ def scan_operational_outcome(
         }
         chain = _next_evidence_hash(chain, record)
         count += 1
+        processed.append((start, end, opening, high, low, close, volume, source))
         scanned_through = end.isoformat()
         if side == "LONG":
             if opening <= stop:
                 result = OperationalResult(OperationalOutcome.SL_FIRST, opening, end.isoformat(), f"{source}:gap-open", chain)
-                return OperationalScan(result, scanned_through, chain, count)
+                return OperationalScan(result, scanned_through, chain, count, tuple(processed))
             if opening >= target:
                 result = OperationalResult(OperationalOutcome.TP_FIRST, target, end.isoformat(), f"{source}:gap-target", chain)
-                return OperationalScan(result, scanned_through, chain, count)
+                return OperationalScan(result, scanned_through, chain, count, tuple(processed))
             if low <= stop:  # also wins the deliberately conservative same-bar tie
                 result = OperationalResult(OperationalOutcome.SL_FIRST, stop, end.isoformat(), f"{source}:barrier", chain)
-                return OperationalScan(result, scanned_through, chain, count)
+                return OperationalScan(result, scanned_through, chain, count, tuple(processed))
             if high >= target:
                 result = OperationalResult(OperationalOutcome.TP_FIRST, target, end.isoformat(), f"{source}:barrier", chain)
-                return OperationalScan(result, scanned_through, chain, count)
+                return OperationalScan(result, scanned_through, chain, count, tuple(processed))
         else:
             if opening >= stop:
                 result = OperationalResult(OperationalOutcome.SL_FIRST, opening, end.isoformat(), f"{source}:gap-open", chain)
-                return OperationalScan(result, scanned_through, chain, count)
+                return OperationalScan(result, scanned_through, chain, count, tuple(processed))
             if opening <= target:
                 result = OperationalResult(OperationalOutcome.TP_FIRST, target, end.isoformat(), f"{source}:gap-target", chain)
-                return OperationalScan(result, scanned_through, chain, count)
+                return OperationalScan(result, scanned_through, chain, count, tuple(processed))
             if high >= stop:
                 result = OperationalResult(OperationalOutcome.SL_FIRST, stop, end.isoformat(), f"{source}:barrier", chain)
-                return OperationalScan(result, scanned_through, chain, count)
+                return OperationalScan(result, scanned_through, chain, count, tuple(processed))
             if low <= target:
                 result = OperationalResult(OperationalOutcome.TP_FIRST, target, end.isoformat(), f"{source}:barrier", chain)
-                return OperationalScan(result, scanned_through, chain, count)
+                return OperationalScan(result, scanned_through, chain, count, tuple(processed))
     if now < timeout:
-        return OperationalScan(None, scanned_through, chain, count)
+        return OperationalScan(None, scanned_through, chain, count, tuple(processed))
     exact = next((row for row in evidence if row[1] == timeout), None)
     if exact is None:
-        return OperationalScan(None, scanned_through, chain, count)
+        return OperationalScan(None, scanned_through, chain, count, tuple(processed))
     result = OperationalResult(
         OperationalOutcome.TIMEOUT, exact[5], timeout.isoformat(),
         f"{exact[7]}:timeout-close", chain,
     )
-    return OperationalScan(result, scanned_through, chain, count)
+    return OperationalScan(result, scanned_through, chain, count, tuple(processed))
 
 
 def resolve_operational_outcome(contract, bars_5m, as_of, daily_bars=None):
@@ -497,16 +507,21 @@ def valid_operational_outcome(row, parent):
             updated = utc_timestamp(row["checkpoint_updated_at"])
             scan_sha = row["scan_evidence_sha256"]
             scan_json = row["scan_evidence_json"]
+            scan_payload = json.loads(scan_json) if isinstance(scan_json, str) else None
             if (not evaluation_start < scanned <= timeout or updated < scanned
                     or not isinstance(scan_sha, str) or len(scan_sha) != 64
                     or any(char not in "0123456789abcdef" for char in scan_sha)
                     or not isinstance(scan_json, str)
-                    or canonical(json.loads(scan_json)) != scan_json
+                    or canonical(scan_payload) != scan_json
                     or row["checkpoint_sha256"] != operational_checkpoint_digest(
                         parent["observation_sha256"], row["contract_sha256"], scanned,
                         scan_sha, count, scan_json, updated,
                     )):
                 return False
+            execution = scan_payload.get("execution_assessment") if isinstance(scan_payload, dict) else None
+            if isinstance(execution, dict) and "scanned_through" in execution:
+                from .execution_path import validate_execution_checkpoint
+                validate_execution_checkpoint(execution, contract, scanned)
         if row["resolution_status"] == "PENDING":
             return all(row[name] is None for name in result_fields)
         if row["resolution_status"] != "RESOLVED":

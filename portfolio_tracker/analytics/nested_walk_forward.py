@@ -171,7 +171,7 @@ def _development_stop_evidence(samples: Sequence[HorizonSample]) -> dict:
         "observed_sl_samples": len(multiples),
         "gap_samples": sum("gap-open" in (row.sl_exit_source or "") for row in stop_rows),
         "gross_loss_multiples": sorted(multiples),
-        "semantics": "OBSERVED_EXIT_VS_FROZEN_STOP_DISTANCE_BEFORE_FILL_COSTS",
+        "semantics": "OHLC_SIMULATED_EXIT_VS_POSSIBLE_FILL_STOP_DISTANCE_BEFORE_COSTS",
     }
 
 

@@ -1000,6 +1000,7 @@ class PortfolioRepository:
             operational_checkpoint_digest, operational_outcome_digest,
             scan_operational_outcome, valid_operational_outcome,
         )
+        from .analytics.execution_path import advance_execution_checkpoint
         from .services.model_observations import VERSION, canonical, utc_timestamp, valid_observation
         now = utc_timestamp(current_as_of)
         with self.database.connect() as connection:
@@ -1088,14 +1089,23 @@ class PortfolioRepository:
                 "evidence_count": scan.evidence_count,
                 "artifacts": dict(evidence_artifacts or {}),
             })
-            evidence_json = canonical({"chunks": chunks})
+            result = scan.result
+            # The fill state advances from the exact new rows already verified
+            # by the barrier scanner. It is signed on *every* checkpoint, so a
+            # long horizon can resume after old 5m bars leave the provider.
+            execution_state = advance_execution_checkpoint(
+                contract, scan.observed_bars, scan.scanned_through,
+                prior=prior_evidence.get("execution_assessment"),
+                previous_scanned_through=child["scanned_through"],
+            )
+            evidence_payload = {"chunks": chunks, "execution_assessment": execution_state}
+            evidence_json = canonical(evidence_payload)
             checkpoint_updated_at = now.isoformat()
             checkpoint_sha = operational_checkpoint_digest(
                 parent["observation_sha256"], child["contract_sha256"],
                 scan.scanned_through, scan.evidence_sha256, scan.evidence_count,
                 evidence_json, checkpoint_updated_at,
             )
-            result = scan.result
             if result is not None:
                 provider = daily_source if result.exit_source.startswith("1d:") else source
                 result = OperationalResult(
@@ -1339,9 +1349,14 @@ class PortfolioRepository:
         return summarize_operational_events(record for record in records if record is not None)
 
     def operational_validation_counts(self, symbol: str) -> dict[str, dict[str, int]]:
-        """Verified forward counts by horizon; hypothetical hits are not eligible entries."""
+        """Verified forward counts; only possible fills count as eligible.
+
+        These are simulated OHLC fills, never confirmed GBM+ executions.
+        Old assumed-entry rows intentionally cannot satisfy this gate.
+        """
         from .services.directional_collection import HORIZON_MINUTES
         from .services.model_observations import VERSION, PREVIOUS_VERSION
+        from .analytics.execution_path import CHECKPOINT_VERSION, EXECUTION_VERSION
 
         counts = {label: {"resolved": 0, "eligible": 0} for label in HORIZON_MINUTES}
         with self.database.connect() as connection:
@@ -1366,7 +1381,12 @@ class PortfolioRepository:
                 if label not in counts or result.get("resolution_status") != "RESOLVED":
                     continue
                 counts[label]["resolved"] += 1
-                if target.get("eligible_at_emission") is True:
+                execution = (result.get("evidence") or {}).get("execution_assessment") or {}
+                if (target.get("eligible_at_emission") is True
+                        and execution.get("version") == EXECUTION_VERSION
+                        and execution.get("checkpoint_version") == CHECKPOINT_VERSION
+                        and execution.get("status") == "SIMULATED_RESOLVED"
+                        and execution.get("scanned_through") == result.get("checkpoint", {}).get("scanned_through")):
                     counts[label]["eligible"] += 1
         return counts
 

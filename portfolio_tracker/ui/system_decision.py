@@ -1,7 +1,17 @@
 """Compact Streamlit presentation for the read-only system recommendation."""
 from __future__ import annotations
 
+import math
+
 import streamlit as st
+
+
+def _positive_or_none(value):
+    try:
+        number = float(value)
+        return number if math.isfinite(number) and number > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def render_validation_banner(status, slot=None):
@@ -13,106 +23,103 @@ def render_validation_banner(status, slot=None):
         target.info(str(status["banner"]), icon=":material/verified:")
 
 
-def render_system_decision(decision):
+def _visible_levels(decision, intraday_plan=None):
+    """Choose one reference: the real holding, or one prospective entry.
+
+    Presentation never converts a hypothetical zone touch into a ledger fill.
+    The decision engine and its risk gates remain the source of authorization.
+    """
+    holding = float(decision.current_shares) > 0
+    if holding:
+        entry = decision.average_price
+        stop = decision.stop_loss
+        target = decision.take_profit
+        entry_label = "Compra registrada · promedio"
+        stop_label = "Stop de la posición"
+        target_label = "Salida objetivo"
+        rr_label = "R:R desde compra"
+        note = "Posición registrada: no se muestra otra entrada. Verifica la ejecución real de cualquier salida en GBM+."
+    elif decision.action == "COMPRAR":
+        entry = decision.entry_high if decision.entry_high is not None else decision.entry_low
+        stop = decision.stop_loss
+        target = decision.take_profit
+        entry_label = "Única entrada autorizada"
+        stop_label = "Stop del plan"
+        target_label = "Objetivo del plan"
+        rr_label = "R:R del plan"
+        note = "Entrada sujeta a la decisión vigente y a ejecución manual en GBM+."
+    elif (intraday_plan is not None and intraday_plan.entry is not None
+          and intraday_plan.status in {"ESPERAR_ENTRADA", "VERIFICAR_GATILLO"}):
+        entry = intraday_plan.entry
+        stop = intraday_plan.stop
+        target = intraday_plan.target
+        entry_label = "Única entrada condicional"
+        stop_label = "Stop si se ejecuta"
+        target_label = "Objetivo si se ejecuta"
+        rr_label = "R:R del plan"
+        note = (
+            f"Corte firmado: {intraday_plan.status.replace('_', ' ').lower()}. "
+            "Es una referencia prospectiva, no un fill ni autorización de compra."
+        )
+    else:
+        entry = stop = target = None
+        entry_label = "Entrada disponible"
+        stop_label = "Stop"
+        target_label = "Objetivo"
+        rr_label = "R:R"
+        note = (
+            "La oportunidad del corte ya terminó; esperar un nuevo corte prospectivo."
+            if intraday_plan is not None and intraday_plan.status in {"OBJETIVO_OBSERVADO", "STOP_OBSERVADO"}
+            else "Sin una entrada autorizada ni un corte vigente evaluable; no se inventa un precio de compra."
+        )
+    entry, stop, target = map(_positive_or_none, (entry, stop, target))
+    valid = all(value is not None for value in (entry, stop, target))
+    ratio = (target - entry) / (entry - stop) if valid and stop < entry < target else None
+    return (entry_label, entry, stop_label, stop, target_label, target,
+            rr_label, ratio, note, holding)
+
+
+def render_system_decision(decision, *, intraday_plan=None, current_price=None):
+    """Show actual holding levels, or one concise flat-portfolio state."""
+    if float(decision.current_shares) <= 0:
+        action = getattr(decision, "action", None)
+        if action == "COMPRAR":
+            entry = _positive_or_none(getattr(decision, "entry_high", None))
+            if entry is not None:
+                st.caption(
+                    f"COMPRAR · entrada autorizada ${entry:,.2f} · ejecución manual; "
+                    "confirmar precio y disponibilidad en GBM+."
+                )
+        elif action in {"ESPERAR", "NO_ACCIONABLE"}:
+            cause = str(getattr(decision, "waiting_cause", "") or "").strip()
+            if not cause:
+                reasons = getattr(decision, "reasons", ()) or ()
+                cause = str(reasons[0]).strip() if reasons else "sin entrada validada"
+            # Scores and marginal touches do not authorize a purchase.
+            st.caption(f"ESPERAR · {cause}")
+        return
+
+    stop = _positive_or_none(decision.stop_loss)
+    target = _positive_or_none(decision.take_profit)
+    average = _positive_or_none(decision.average_price)
+    last_close = _positive_or_none(current_price)
+    exit_pending = decision.action in {"VENDER", "CONFIRMAR_SALIDA"}
+    target_passed = target is not None and last_close is not None and target <= last_close
     with st.container(border=True, key="system_decision"):
-        st.markdown("### DECISIÓN DEL SISTEMA")
-        if getattr(decision, "recommendation_mode", "CONSERVADOR") == "CONSERVADOR":
-            st.caption("PRELIMINAR · Modo CONSERVADOR: no hay compra autorizada en este corte. "
-                       "Se exigen 300 entradas ejecutables verificadas y un modelo aprobado por horizonte.")
-        if decision.action == "ESPERAR":
-            reason = {
-                "VETO_RIESGO": "VETO DE RIESGO",
-                "FALTA_EVIDENCIA": "FALTA DE EVIDENCIA",
-                "CONTRATO_FEATURES": "ERROR DE PARIDAD DE FEATURES",
-                "GATILLO_PENDIENTE": "GATILLO PENDIENTE",
-            }.get(getattr(decision, "waiting_cause", ""),
-                  "VETO DE RIESGO" if decision.risk_veto else "GATILLO PENDIENTE")
-            headline = f"ESPERAR AHORA · {reason}"
-        else:
-            headline = decision.action.replace("_", " ")
-        message = f"**{headline}**  \n{decision.explanation}"
-        if decision.action == "COMPRAR":
-            st.success(message, icon=":material/trending_up:")
-        elif decision.action in {"VENDER", "CONFIRMAR_SALIDA"}:
-            st.error(message, icon=":material/trending_down:")
-        elif decision.action == "MANTENER":
-            st.info(message, icon=":material/pause_circle:")
-        else:
-            st.warning(message, icon=":material/schedule:")
-        first, second, third, fourth = st.columns(4, gap="small")
-        first.metric(
-            "Entrada",
-            "N/D" if decision.entry_low is None else
-            f"${decision.entry_low:,.2f}–${decision.entry_high:,.2f}",
+        stop_col, target_col, average_col, shares_col = st.columns(4, gap="small")
+        stop_label = (
+            "Stop loss · confirmar salida"
+            if exit_pending
+            else "Stop loss móvil"
         )
-        second.metric("Stop loss", "N/D" if decision.stop_loss is None else f"${decision.stop_loss:,.2f}")
-        third.metric("Take profit", "N/D" if decision.take_profit is None else f"${decision.take_profit:,.2f}")
-        fourth.metric("R:R", "N/D" if decision.reward_risk is None else f"{decision.reward_risk:.2f}")
-        capital, position, risk = st.columns(3, gap="small")
-        capital.metric("Capital / efectivo", f"${decision.total_capital:,.2f} / ${decision.cash_available:,.2f}")
-        position.metric(
-            "Posición actual / nueva",
-            f"{decision.current_shares:g} / {decision.position_size:d} acciones",
-            help="La segunda cifra solo es distinta de cero cuando COMPRAR está autorizado.",
-        )
-        risk.metric(
-            "Riesgo máximo estimado / EV realista",
-            f"${decision.monetary_risk:,.2f} / "
-            + ("N/D" if decision.expected_value_total is None else f"${decision.expected_value_total:+,.2f}"),
-            help=f"Riesgo dimensionado con la peor salida SL observada. Presupuesto: ${decision.risk_budget:,.2f}.",
-        )
-        observed_column, theoretical_column = st.columns(2, gap="small")
-        observed_column.metric(
-            "EV neta observada/realista · por acción",
-            "N/D" if decision.observed_expected_value_per_share is None
-            else f"${decision.observed_expected_value_per_share:+,.2f}",
-            help="Usa salidas SL observadas en desarrollo, spread, deslizamiento y posibilidad de no ejecución.",
-        )
-        theoretical_column.metric(
-            "EV neta teórica · por acción",
-            "N/D" if decision.theoretical_expected_value_per_share is None
-            else f"${decision.theoretical_expected_value_per_share:+,.2f}",
-            help="Supone ejecución y salida exacta en el stop; solo sirve como referencia.",
-        )
-        if decision.adjusted_win_probability is None:
-            st.caption(
-                "TP primero / SL primero / timeout: N/D · sin modelo operativo "
-                "calibrado y aprobado. Los scores direccionales no autorizan la compra."
+        stop_col.metric(stop_label, "N/D" if stop is None else f"${stop:,.2f}")
+        if exit_pending or target_passed:
+            target_col.metric(
+                "Salida pendiente · último cierre" if exit_pending else "Objetivo superado · último cierre",
+                "N/D" if last_close is None else f"${last_close:,.2f}",
+                help="Referencia del último cierre de 5 minutos; no es un precio de venta ejecutado ni garantizado.",
             )
         else:
-            brier = (
-                "N/D" if decision.operational_brier is None
-                else f"{decision.operational_brier:.4f}"
-            )
-            baseline = (
-                "N/D" if decision.operational_baseline_brier is None
-                else f"{decision.operational_baseline_brier:.4f}"
-            )
-            st.caption(
-                f"TP primero {decision.adjusted_win_probability:.1%} · "
-                f"SL primero {decision.sl_first_probability:.1%} · "
-                f"timeout {decision.timeout_probability:.1%} · "
-                f"Brier operativo OOS {brier} · baseline {baseline} · "
-                f"{decision.validated_sessions} muestras holdout. "
-                f"Costes estimados por lado {decision.cost_rate_per_side:.2%}; "
-                f"{decision.observed_sl_samples} salidas SL observadas en desarrollo; "
-                f"fill supuesto {decision.fill_probability:.0%}; "
-                f"spread supuesto {decision.spread_bps:.1f} pb. "
-                "Timeout estresado a la peor salida SL observada. "
-                f"{decision.calibration_status}. "
-                "Un gap futuro puede superar incluso la peor pérdida histórica."
-            )
-        st.markdown("**Condiciones de activación LONG**")
-        st.table([
-            {
-                "Condición": item.label,
-                "Estado": "Sí" if item.passed else "No",
-                "Detalle": item.detail,
-            }
-            for item in decision.activation_checks
-        ])
-        st.caption(
-            f"Acción ahora: {decision.action} · Sesgo descriptivo: "
-            f"{decision.preliminary_bias} ({decision.preliminary_horizon}). "
-            "Recomendación informativa; ejecución manual."
-        )
+            target_col.metric("Precio objetivo de salida", "N/D" if target is None else f"${target:,.2f}")
+        average_col.metric("Precio promedio de compra", "N/D" if average is None else f"${average:,.2f}")
+        shares_col.metric("Acciones en cartera", f"{decision.current_shares:g}")

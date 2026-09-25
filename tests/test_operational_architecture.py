@@ -161,6 +161,69 @@ def test_stop_alert_does_not_sell_and_fill_releases_position(tmp_path):
     assert repo.cash_balance_usd() == Decimal("921.05")
 
 
+def test_closed_bar_trailing_stop_only_rises_and_is_used_by_decision(tmp_path):
+    from portfolio_tracker.services.decision_engine import generate_decision
+
+    repo, original = repository(tmp_path), _analysis()
+    distant_target = original.last_price + 100
+    levels = replace(original.buy_levels, take_profit_1=distant_target,
+                     take_profit_2=distant_target + 1)
+    analysis = replace(original, buy_levels=levels, execution_levels=levels)
+    fill(repo, analysis, TradeSide.BUY)
+    synchronize_position(repo.database, analysis)
+    with repo.database.connect() as connection:
+        first_state, _ = read_state(connection, analysis.symbol)
+    initial_stop = first_state["trailing_stop"]
+    distance = max(levels.entry_high - levels.stop_loss, 2.25 * analysis.atr_5m)
+
+    bars = analysis.intraday_indicators.copy()
+    first_stamp = analysis.as_of + timedelta(minutes=5)
+    rising_close = max(analysis.last_price, levels.entry_high) + distance + 1
+    bars.loc[first_stamp] = bars.iloc[-1]
+    bars.loc[first_stamp, ["Low", "High", "Close"]] = [
+        rising_close - 0.2, rising_close + 0.2, rising_close,
+    ]
+    rising = replace(analysis, as_of=first_stamp, last_price=rising_close,
+                     intraday_indicators=bars)
+    synchronize_position(repo.database, rising)
+    with repo.database.connect() as connection:
+        risen_state, _ = read_state(connection, analysis.symbol)
+    raised_stop = risen_state["trailing_stop"]
+    assert raised_stop > initial_stop
+    assert generate_decision(analysis.symbol, analysis=rising, repository=repo).stop_loss == pytest.approx(raised_stop)
+
+    second_stamp = first_stamp + timedelta(minutes=5)
+    retreat_close = rising_close - 0.1
+    bars.loc[second_stamp] = bars.iloc[-1]
+    bars.loc[second_stamp, ["Low", "High", "Close"]] = [
+        max(raised_stop + 0.1, retreat_close - 0.2),
+        retreat_close + 0.2, retreat_close,
+    ]
+    retreat = replace(analysis, as_of=second_stamp, last_price=retreat_close,
+                      intraday_indicators=bars)
+    synchronize_position(repo.database, retreat)
+    with repo.database.connect() as connection:
+        retreat_state, _ = read_state(connection, analysis.symbol)
+    assert retreat_state["trailing_stop"] == pytest.approx(raised_stop)
+    assert len(repo.list_trades()) == 1
+
+    third_stamp = second_stamp + timedelta(minutes=5)
+    recovered_close = raised_stop + 0.2
+    bars.loc[third_stamp] = bars.iloc[-1]
+    bars.loc[third_stamp, ["Low", "High", "Close"]] = [
+        raised_stop - 0.1, recovered_close + 0.1, recovered_close,
+    ]
+    crossed = replace(analysis, as_of=third_stamp, last_price=recovered_close,
+                      intraday_indicators=bars)
+    alert = synchronize_position(repo.database, crossed)
+    assert alert.position_state == "EXIT_PENDING"
+    decision = generate_decision(analysis.symbol, analysis=alert, repository=repo)
+    assert decision.action == "CONFIRMAR_SALIDA"
+    assert decision.stop_loss == pytest.approx(raised_stop)
+    assert len(repo.list_trades()) == 1  # A stop alert never fabricates a sale.
+    audit_operational_history(repo.database)
+
+
 def test_corrupted_state_fails_closed(tmp_path):
     repo, analysis = repository(tmp_path), _analysis()
     synchronize_position(repo.database, analysis)

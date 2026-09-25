@@ -23,6 +23,7 @@ from .operational_target import (
     IncompleteOperationalEvidence,
     resolve_operational_outcome,
 )
+from .execution_path import EXECUTION_VERSION, assess_execution_path
 from .replay import ReplayDataset, evaluate_replay_cut
 from .temporal_contract import (
     ANCHOR_VERSION, BAR, maturity as replay_target_close, scheduled_cut,
@@ -37,7 +38,8 @@ from ..services.scenario_calibration import outcome_class
 
 
 LEGACY_HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V1"
-HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V2"
+PREVIOUS_HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V2"
+HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V3"
 DEFAULT_PARAMETERS = {
     "minimum_probability": 0.55,
     "stop_atr_multiple": 2.25,
@@ -223,6 +225,12 @@ def _cut_record(
             ),
             "operational_contract": operational_contract,
             "operational_result": _operational_label(operational_contract, dataset),
+            # The first-passage barrier is a separate hypothetical population.
+            # A possible limit fill must precede any executable outcome.
+            "execution_result": assess_execution_path(
+                operational_contract, dataset.intraday, dataset.as_of,
+                daily_bars=dataset.daily,
+            ).as_record(),
         })
     cut_payload = {
         "cut_id": _sha({
@@ -344,7 +352,8 @@ def validate_historical_replay(payload) -> bool:
     """Fail closed when a cut, outcome, feature snapshot or manifest changed."""
 
     if (not isinstance(payload, dict) or payload.get("contract") not in {
-            LEGACY_HISTORICAL_REPLAY_CONTRACT, HISTORICAL_REPLAY_CONTRACT}):
+            LEGACY_HISTORICAL_REPLAY_CONTRACT,
+            PREVIOUS_HISTORICAL_REPLAY_CONTRACT, HISTORICAL_REPLAY_CONTRACT}):
         raise ValueError("Contrato de replay histórico desconocido.")
     observations = payload.get("observations")
     if not isinstance(observations, list):
@@ -356,6 +365,12 @@ def validate_historical_replay(payload) -> bool:
             raise ValueError("Firma de corte histórico inválida.")
         if len(item.get("horizons", ())) != len(HORIZON_MINUTES):
             raise ValueError("Un corte histórico debe contener seis horizontes.")
+        if payload.get("contract") == HISTORICAL_REPLAY_CONTRACT:
+            if any(not isinstance(row.get("execution_result"), dict)
+                   or not row["execution_result"].get("status")
+                   or row["execution_result"].get("version") != EXECUTION_VERSION
+                   for row in item["horizons"]):
+                raise ValueError("Replay V3 sin evaluación de ejecución versionada.")
     deterministic_keys = (
         "contract", "symbol", "dataset_sha256", "peer_dataset_sha256",
         "parameters", "requested_start", "requested_end", "max_cuts",

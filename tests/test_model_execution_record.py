@@ -354,6 +354,11 @@ def test_operational_tp_first_resolves_early_and_is_joined_to_execution(reposito
     assert {float(item["exit_price"]) for item in results} == {105.0}
     assert {item["exit_at"] for item in results} == {"2026-09-03T15:10:00+00:00"}
     assert all(item["outcome_sha256"] for item in results)
+    # The same candle also touched the limit price. OHLC cannot order its
+    # entry and TP, so these barrier wins are not executable training wins.
+    assert {item["evidence"]["execution_assessment"]["status"] for item in results} == {
+        "AMBIGUOUS_NO_TRADE"
+    }
     assert repository.verify_operational_model_outcomes() == (6, ())
     coverage = repository.operational_event_coverage("SMCI")
     assert coverage["horizon_resolutions"] == 6
@@ -364,6 +369,29 @@ def test_operational_tp_first_resolves_early_and_is_joined_to_execution(reposito
     per_horizon = repository.operational_validation_counts("SMCI")
     assert all(item["resolved"] == 1 for item in per_horizon.values())
     assert all(item["eligible"] <= item["resolved"] for item in per_horizon.values())
+    assert all(item["eligible"] == 0 for item in per_horizon.values())
+
+
+def test_forward_possible_fill_precedes_target_and_counts_once_per_horizon(repository):
+    assert record_fixed_directional(repository, _analysis(), {}, CUT) == 6
+    bars = pd.DataFrame(
+        {"Open": [100.0, 100.0], "High": [101.0, 106.0],
+         "Low": [99.0, 99.0], "Close": [100.0, 104.0],
+         "Volume": [2_000.0, 2_000.0]},
+        index=pd.DatetimeIndex(["2026-09-03T15:05:00Z", "2026-09-03T15:10:00Z"]),
+    )
+    assert repository.resolve_operational_model_outcomes(
+        symbol="SMCI", current_as_of=datetime(2026, 9, 3, 15, 15, tzinfo=timezone.utc),
+        historical_bars=bars,
+    ) == 6
+    record = repository.live_model_execution_record(
+        execution_id("SMCI", "2026-09-03", COLLECTION_PROTOCOL)
+    )
+    assert {row["operational_result"]["evidence"]["execution_assessment"]["status"]
+            for row in record["predictions"]} == {"SIMULATED_RESOLVED"}
+    assert all(row["eligible"] == 1 for row in
+               repository.operational_validation_counts("SMCI").values())
+    assert repository.verify_operational_model_outcomes() == (6, ())
 
 
 def test_operational_timeout_requires_exact_horizon_close(repository):
@@ -441,6 +469,11 @@ def test_operational_checkpoint_resumes_with_only_new_session_bars_after_restart
     assert checkpoint["scan_evidence_json"]
     assert len(checkpoint["checkpoint_sha256"]) == 64
     assert checkpoint["checkpoint_updated_at"]
+    pending_execution = json.loads(checkpoint["scan_evidence_json"])["execution_assessment"]
+    assert pending_execution["status"] == "FILLED_PENDING"
+    assert pending_execution["checkpoint_version"] == "OHLC_EXECUTION_STATE_CHECKPOINT_V1"
+    assert pending_execution["fill_price"] == 100.0
+    assert pending_execution["scanned_through"] == checkpoint["scanned_through"]
     assert repository.verify_operational_model_outcomes() == (6, ())
 
     # Simulate a fresh process.  Only the first new candle of the following
@@ -465,6 +498,11 @@ def test_operational_checkpoint_resumes_with_only_new_session_bars_after_restart
     assert int(resolved["scan_evidence_count"]) == len(first_session) + 1
     assert resolved["scanned_through"] == "2026-09-04T13:35:00+00:00"
     assert resolved["checkpoint_sha256"]
+    resumed_execution = json.loads(resolved["evidence_json"])["execution_assessment"]
+    assert resumed_execution["status"] == "SIMULATED_RESOLVED"
+    assert resumed_execution["fill_at"] == "2026-09-03T15:10:00+00:00"
+    assert resumed_execution["outcome"] == "TP_FIRST"
+    assert repository.operational_validation_counts("SMCI")["1 Día"]["eligible"] == 1
     assert restarted.verify_operational_model_outcomes() == (6, ())
 
     # Retrying the same worker payload is a no-op and preserves the signed row.
@@ -475,6 +513,58 @@ def test_operational_checkpoint_resumes_with_only_new_session_bars_after_restart
         historical_bars=new_only,
     ) == 0
     assert _operational_row(restarted) == before
+
+
+def test_checkpoint_without_possible_fill_cannot_turn_later_tp_into_trade(repository):
+    assert record_fixed_directional(repository, _analysis(), {}, CUT) == 6
+    source = _flat_remainder_of_observation_session().copy()
+    source["Open"] = 101.0
+    source["High"] = 102.0
+    source["Low"] = 100.5
+    source["Close"] = 101.0
+    repository.resolve_operational_model_outcomes(
+        symbol="SMCI", current_as_of=datetime(2026, 9, 3, 20, tzinfo=timezone.utc),
+        historical_bars=source,
+    )
+    checkpoint = _operational_row(repository)
+    assert json.loads(checkpoint["scan_evidence_json"])["execution_assessment"]["status"] == "NO_FILL"
+    restarted = PortfolioRepository(Database(repository.database.path))
+    new_only = pd.DataFrame(
+        {"Open": [101.0], "High": [106.0], "Low": [100.5],
+         "Close": [105.25], "Volume": [2_000.0]},
+        index=pd.DatetimeIndex(["2026-09-04T13:30:00Z"]),
+    )
+    assert restarted.resolve_operational_model_outcomes(
+        symbol="SMCI", current_as_of=datetime(2026, 9, 4, 13, 35, tzinfo=timezone.utc),
+        historical_bars=new_only,
+    ) >= 1
+    resolved = _operational_row(restarted)
+    assert resolved["outcome"] == "TP_FIRST"  # hypothetical barrier only
+    assert json.loads(resolved["evidence_json"])["execution_assessment"]["status"] == "NO_FILL"
+    assert restarted.operational_validation_counts("SMCI")["1 Día"]["eligible"] == 0
+
+
+def test_checkpointed_fill_keeps_gap_open_loss_after_restart(repository):
+    assert record_fixed_directional(repository, _analysis(), {}, CUT) == 6
+    repository.resolve_operational_model_outcomes(
+        symbol="SMCI", current_as_of=datetime(2026, 9, 3, 20, tzinfo=timezone.utc),
+        historical_bars=_flat_remainder_of_observation_session(),
+    )
+    restarted = PortfolioRepository(Database(repository.database.path))
+    gap = pd.DataFrame(
+        {"Open": [90.0], "High": [92.0], "Low": [88.0],
+         "Close": [90.5], "Volume": [2_000.0]},
+        index=pd.DatetimeIndex(["2026-09-04T13:30:00Z"]),
+    )
+    assert restarted.resolve_operational_model_outcomes(
+        symbol="SMCI", current_as_of=datetime(2026, 9, 4, 13, 35, tzinfo=timezone.utc),
+        historical_bars=gap,
+    ) >= 1
+    state = json.loads(_operational_row(restarted)["evidence_json"])["execution_assessment"]
+    assert state["status"] == "SIMULATED_RESOLVED"
+    assert state["outcome"] == "SL_FIRST"
+    assert state["exit_price"] == 90.0  # stop was 95, but the gap opened at 90
+    assert state["net_pnl_per_share"] < -10
 
 
 def test_operational_checkpoint_tamper_fails_closed(repository):
