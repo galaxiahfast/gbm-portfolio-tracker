@@ -13,6 +13,8 @@ from portfolio_tracker.analytics.multi_timeframe import (
     classify_macro_trend,
     resample_ohlcv,
     strict_confluence_gate,
+    _projection_context_bias,
+    _projection_distribution,
 )
 
 
@@ -39,6 +41,24 @@ def test_resample_builds_hourly_ohlcv_without_network_calls() -> None:
     assert hourly.iloc[0]["Close"] == source.iloc[11]["Close"]
     assert hourly.iloc[0]["High"] == source.iloc[:12]["High"].max()
     assert hourly.iloc[0]["Volume"] == source.iloc[:12]["Volume"].sum()
+
+
+def test_directional_score_map_retains_distance_when_all_votes_agree() -> None:
+    base = {"Open": 100.0, "High": 100.5, "Low": 99.5,
+            "Close": 100.0, "Volume": 1000.0}
+    near = pd.DataFrame([{**base, "EMA9": 99.9, "EMA21": 99.9,
+                          "EMA50": 99.9, "EMA200": 99.9,
+                          "MACD": 0.11, "MACD_signal": 0.1}])
+    far = pd.DataFrame([{**base, "EMA9": 98.0, "EMA21": 98.0,
+                         "EMA50": 98.0, "EMA200": 98.0,
+                         "MACD": 0.3, "MACD_signal": 0.1}])
+    near_bias, far_bias = _projection_context_bias(near), _projection_context_bias(far)
+    assert 0 < near_bias < far_bias < 1
+    near_scores = _projection_distribution(near_bias, False, False)
+    far_scores = _projection_distribution(far_bias, False, False)
+    assert near_scores != far_scores
+    assert far_scores[0] > near_scores[0]
+    assert all(math.isclose(sum(scores), 100.0) for scores in (near_scores, far_scores))
 
 
 def test_macro_classifier_requires_price_ema_and_macd_alignment() -> None:

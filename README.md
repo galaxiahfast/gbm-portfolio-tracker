@@ -217,7 +217,7 @@ Cierra la aplicación y copia la carpeta `data/`. La base y los comprobantes deb
 
 ### Respaldo cifrado opcional en GitHub
 
-El script `scripts/sync_github_backup.ps1` crea una instantánea consistente, la cifra con AES-256-GCM y prepara únicamente tres archivos seguros: el respaldo cifrado, su manifiesto SHA-256 y `database/schema.sql` sin registros. La clave no se guarda en archivos ni en Git.
+El script `scripts/sync_github_backup.ps1` crea una instantánea consistente de la base y un archivo de comprobantes. Cifra ambos con AES-256-GCM y prepara los dos respaldos cifrados, su manifiesto SHA-256 y `database/schema.sql` sin registros. La clave no se guarda en archivos ni en Git.
 
 ```powershell
 # Ejecutar una sola vez por equipo y conservar el resultado en un gestor de contraseñas:
@@ -232,4 +232,4 @@ $env:GBM_BACKUP_KEY = [Convert]::ToBase64String($bytes).Replace('+','-').Replace
 .\scripts\sync_github_backup.ps1 -Commit -Push
 ```
 
-La restauración exige la misma `GBM_BACKUP_KEY`. Nunca publiques esa clave, `.env`, `secrets.toml`, la carpeta `data/` ni los comprobantes originales.
+La restauración en otra PC exige la misma `GBM_BACKUP_KEY` y, tras `git pull`, ejecutar `python scripts/restore_github_backup.py`. El restaurador crea la base solo si no existe y añade comprobantes faltantes; nunca sobrescribe una base o un comprobante local distinto. Un `git pull` por sí solo actualiza los archivos cifrados, no la base local. Nunca publiques la clave, `.env`, `secrets.toml`, la carpeta `data/` ni los comprobantes originales.

@@ -20,7 +20,8 @@ def test_all_st_tabs_calls_are_unpacked_into_individual_containers() -> None:
         and node.value.func.attr == "tabs"
     ]
 
-    assert len(tab_assignments) == 3
+    # El historial de operaciones ahora está en Resumen, no en una pestaña.
+    assert len(tab_assignments) == 2
     assert all(
         len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple)
         for node in tab_assignments

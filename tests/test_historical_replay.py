@@ -122,3 +122,41 @@ def test_execution_assessment_is_inside_signed_replay(replay_payload):
     altered["observations"][0]["horizons"][0]["execution_result"]["status"] = "SIMULATED_RESOLVED"
     with pytest.raises(ValueError, match="Firma de corte"):
         validate_historical_replay(altered)
+
+
+def test_replay_retains_directional_cut_without_inventing_barriers(monkeypatch):
+    from dataclasses import replace
+    from portfolio_tracker.analytics import historical_replay as module
+    original = module.evaluate_replay_cut
+
+    def without_plan(*args, **kwargs):
+        analysis = original(*args, **kwargs)
+        levels = replace(analysis.execution_levels, direction="LONG",
+                         stop_loss=analysis.last_price - 1,
+                         take_profit_1=analysis.last_price - 0.5)
+        return replace(analysis, execution_levels=levels)
+
+    monkeypatch.setattr(module, "evaluate_replay_cut", without_plan)
+    intraday, daily, as_of = _frames()
+    day = str(as_of.tz_convert("America/New_York").date())
+    payload = build_historical_replay("SMCI", ReplayDataset(intraday, daily, as_of),
+                                      start=day, end=day)
+    assert payload["candidate_cuts"] == 1
+    assert payload["rejected"] == {}
+    assert len(payload["observations"]) == 1
+    assert validate_historical_replay(payload)
+    for horizon in payload["observations"][0]["horizons"]:
+        assert horizon["operational_contract"] is None
+        assert horizon["operational_result"] == {"status": "NOT_APPLICABLE_NO_PLAN", "outcome": None}
+        assert horizon["execution_result"]["eligible"] is False
+        assert horizon["scenario_result"]["status"] in {"RESOLVED", "RIGHT_CENSORED"}
+
+
+def test_pilot_only_labels_preregistered_one_hour_and_one_day():
+    intraday, daily, as_of = _frames()
+    day = str(as_of.tz_convert("America/New_York").date())
+    payload = build_historical_replay("SMCI", ReplayDataset(intraday, daily, as_of),
+                                      start=day, end=day, horizon_minutes=[60, 1440])
+    assert payload["selected_horizons"] == [60, 1440]
+    assert validate_historical_replay(payload)
+    assert [row["horizon_minutes"] for row in payload["observations"][0]["horizons"]] == [60, 1440]

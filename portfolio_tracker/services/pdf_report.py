@@ -186,11 +186,12 @@ def _document(buffer: BytesIO, analysis: "ProbabilityAnalysis", title: str, subj
     )
 
 
-def _report_header(analysis: "ProbabilityAnalysis", title: str, styles) -> list[object]:  # type: ignore[no-untyped-def]
+def _report_header(analysis: "ProbabilityAnalysis", title: str, styles,
+                   data_source: str) -> list[object]:  # type: ignore[no-untyped-def]
     return [
         Paragraph(f"{title} - {analysis.symbol}", styles["ReportTitle"]),
         Paragraph(
-            f"Datos hasta {_safe_text(analysis.as_of.isoformat())} | Fuente: Yahoo Finance / yfinance | Motor Fase 5 | {_safe_text(analysis.probability_status)}",
+            f"Datos hasta {_safe_text(analysis.as_of.isoformat())} | Fuente del análisis: {_safe_text(data_source)} | Motor Fase 5 | {_safe_text(analysis.probability_status)}",
             styles["ReportSubtitle"],
         ),
     ]
@@ -943,11 +944,12 @@ def _build_report(
     subject: str,
     zone_snapshot=None,
     system_decision=None,
+    data_source: str = "No especificada",
 ) -> bytes:
     buffer = BytesIO()
     document = _document(buffer, analysis, title, subject)
     styles = _report_styles()
-    story = _report_header(analysis, title, styles)
+    story = _report_header(analysis, title, styles, data_source)
     if system_decision is not None:
         story.extend(_system_decision_story(system_decision, styles))
     snapshot = zone_snapshot if zone_snapshot is not None else build_visual_zone_snapshot(analysis)
@@ -967,7 +969,8 @@ def _build_report(
     return buffer.getvalue()
 
 
-def build_executive_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None, system_decision=None) -> bytes:
+def build_executive_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None,
+                           system_decision=None, data_source: str = "No especificada") -> bytes:
     """Genera exclusivamente la vista ejecutiva y su proyeccion diaria."""
 
     return _build_report(
@@ -977,11 +980,13 @@ def build_executive_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=Non
         title="Vista ejecutiva",
         zone_snapshot=zone_snapshot,
         system_decision=system_decision,
+        data_source=data_source,
         subject="Decision, horizontes, niveles de riesgo y proyeccion de 15 sesiones",
     )
 
 
-def build_technical_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None, system_decision=None) -> bytes:
+def build_technical_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None,
+                           system_decision=None, data_source: str = "No especificada") -> bytes:
     """Genera exclusivamente graficas, indicadores y lectura tecnica completa."""
 
     return _build_report(
@@ -991,11 +996,13 @@ def build_technical_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=Non
         title="Vista tecnica avanzada",
         zone_snapshot=zone_snapshot,
         system_decision=system_decision,
+        data_source=data_source,
         subject="Panel tecnico multi-temporal completo para auditoria",
     )
 
 
-def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None, system_decision=None) -> bytes:
+def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=None,
+                             system_decision=None, data_source: str = "No especificada") -> bytes:
     """Genera el reporte unificado con la vista ejecutiva y la tecnica."""
 
     return _build_report(
@@ -1005,6 +1012,7 @@ def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=N
         title="Reporte cuantitativo completo",
         zone_snapshot=zone_snapshot,
         system_decision=system_decision,
+        data_source=data_source,
         subject="Resumen ejecutivo y tecnico para revision humana o por IA",
     )
 
@@ -1012,7 +1020,7 @@ def build_probability_report(analysis: "ProbabilityAnalysis", *, zone_snapshot=N
 def build_master_report(
     analysis: "ProbabilityAnalysis",
     calibration_context: Mapping[str, object] | None,
-    *, zone_snapshot=None, system_decision=None,
+    *, zone_snapshot=None, system_decision=None, data_source: str = "No especificada",
 ) -> bytes:
     """Genera las tres vistas: ejecutiva, técnica y calibración auditada."""
 
@@ -1025,5 +1033,6 @@ def build_master_report(
         title="Reporte maestro cuantitativo",
         zone_snapshot=zone_snapshot,
         system_decision=system_decision,
+        data_source=data_source,
         subject="Vista ejecutiva, tecnica avanzada y calibracion fuera de muestra",
     )

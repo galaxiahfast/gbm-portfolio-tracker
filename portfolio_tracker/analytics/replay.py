@@ -76,8 +76,14 @@ def evaluate_replay_cut(dataset, at, *, atr_stop_multiple=2.25, symbol='REPLAY')
     cutoff = utc(at)
     if cutoff > dataset.as_of:
         raise ValueError('El corte solicitado supera el corte disponible del replay.')
+    # Match the existing UI/headless one-calendar-month 5m ingestion window.
+    # Retaining years of 5m bars would change recursive indicators and silently
+    # make this a different engine, as well as quadratic work over replay cuts.
+    month_start = (cutoff.tz_convert(NY) - pd.DateOffset(months=1)).normalize()
+    prefix = dataset.intraday.loc[(dataset.intraday.index >= month_start)
+                                  & (dataset.intraday.index <= cutoff)]
     return analyze_probability(
-        symbol, dataset.intraday.loc[:cutoff], dataset.daily,
+        symbol, prefix, dataset.daily,
         as_of_time=cutoff, atr_stop_multiple=atr_stop_multiple,
     )
 

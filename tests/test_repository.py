@@ -61,7 +61,7 @@ def test_migrations_adopt_existing_database_and_recreate_missing_table(tmp_path)
 
     database = Database(path)
     database.initialize()
-    assert database.schema_version() == 13
+    assert database.schema_version() == 14
     with database.connect() as connection:
         columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(trades)")

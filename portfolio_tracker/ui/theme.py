@@ -206,6 +206,23 @@ div[data-testid="stMetricValue"] {
   font-variant-numeric: tabular-nums;
 }
 
+/* En Resumen, Streamlit separa USD/MXN en fragmentos con tamaños distintos.
+   Ambos importes deben conservar exactamente la misma tipografía. */
+.st-key-portfolio_summary_metrics [data-testid="stMetricValue"],
+.st-key-portfolio_holdings_metrics [data-testid="stMetricValue"] {
+  font-family: inherit !important;
+  font-size: 1rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+}
+.st-key-portfolio_summary_metrics [data-testid="stMetricValue"] *,
+.st-key-portfolio_holdings_metrics [data-testid="stMetricValue"] * {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  letter-spacing: inherit !important;
+}
+
 div[data-testid="stMetricDelta"] { font-size: .68rem; }
 
 /* Botones planos, sin halo ni movimiento. */

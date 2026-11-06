@@ -117,6 +117,8 @@ render_price_zones(_analysis(), reference_only=True)
     captions = "\n".join(item.value for item in app.caption)
     assert "Precio actual" in text
     assert "Bajada" in text and "Subida" in text
+    assert "Toque de niveles · desde este corte hasta el cierre de hoy · PRELIMINAR" in text
+    assert "No es el sesgo direccional" in captions
     assert text.count("Probabilidad estimada de toque hoy") == 6
     assert captions.count("Probabilidad de cierre") == 6
     for removed in ("Zona 1", "IC 95%", "Distancia", "ATR consumido",

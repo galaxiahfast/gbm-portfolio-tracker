@@ -225,9 +225,11 @@ class PortfolioRepository:
         with self.database.connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT t.*, r.thumbnail_path, r.original_path, r.original_filename
+                SELECT t.*, r.thumbnail_path, r.original_path, r.original_filename,
+                       a.buy_trade_id AS allocated_buy_trade_id
                 FROM trades t
                 LEFT JOIN receipts r ON r.id = t.receipt_id
+                LEFT JOIN sale_lot_allocations a ON a.sale_trade_id = t.id
                 ORDER BY t.executed_at {direction}, t.id {direction}
                 """
             ).fetchall()
@@ -238,6 +240,58 @@ class PortfolioRepository:
                 item[field] = _decimal_or_none(item.get(field))
             result.append(item)
         return result
+
+    def assign_sale_to_buy_lot(
+        self, *, sale_trade_id: int, buy_trade_id: int, reason: str,
+    ) -> bool:
+        """Asigna toda una venta a una compra concreta, con validación y rastro.
+
+        Las demás ventas permanecen FIFO. Devuelve False si la misma asignación
+        ya existe; nunca modifica importe, cantidad ni comisión del comprobante.
+        """
+        from datetime import datetime
+
+        from .services.lot_sale_simulator import open_buy_lots
+
+        if not reason.strip():
+            raise ValueError("La asignación requiere una justificación.")
+        with self.database.transaction() as connection:
+            sale = connection.execute(
+                "SELECT * FROM trades WHERE id = ?", (sale_trade_id,)
+            ).fetchone()
+            buy = connection.execute(
+                "SELECT * FROM trades WHERE id = ?", (buy_trade_id,)
+            ).fetchone()
+            if sale is None or buy is None:
+                raise ValueError("No existe la compra o venta indicada.")
+            if sale["side"] != "SELL" or buy["side"] != "BUY":
+                raise ValueError("La asignación exige una venta y una compra.")
+            if sale["symbol"] != buy["symbol"]:
+                raise ValueError("Compra y venta deben ser del mismo símbolo.")
+            if datetime.fromisoformat(buy["executed_at"]) >= datetime.fromisoformat(sale["executed_at"]):
+                raise ValueError("La compra debe preceder a la venta.")
+            existing = connection.execute(
+                "SELECT buy_trade_id FROM sale_lot_allocations WHERE sale_trade_id = ?",
+                (sale_trade_id,),
+            ).fetchone()
+            if existing is not None:
+                if int(existing["buy_trade_id"]) == buy_trade_id:
+                    return False
+                raise ValueError("Esta venta ya tiene otro lote asignado.")
+            rows = connection.execute("""SELECT t.*, a.buy_trade_id AS allocated_buy_trade_id
+                FROM trades t LEFT JOIN sale_lot_allocations a ON a.sale_trade_id = t.id
+                ORDER BY t.executed_at, t.id""").fetchall()
+            projected = [dict(row) for row in rows]
+            next(row for row in projected if row["id"] == sale_trade_id)["allocated_buy_trade_id"] = buy_trade_id
+            # La reconstrucción completa comprueba que ni esta ni ventas posteriores
+            # consuman dos veces el lote elegido.
+            open_buy_lots(projected)
+            connection.execute("""INSERT INTO sale_lot_allocations
+                (sale_trade_id, buy_trade_id, reason, created_at)
+                VALUES (?, ?, ?, ?)""", (
+                    sale_trade_id, buy_trade_id, reason.strip(), _utc_now().isoformat(),
+                ))
+            return True
 
     def delete_trade(self, trade_id: int) -> bool:
         with self.database.transaction() as connection:

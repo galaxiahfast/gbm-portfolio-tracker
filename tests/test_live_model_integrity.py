@@ -303,8 +303,8 @@ def test_upgrade_actual_v8_columns_preserves_legacy(tmp_path):
     assert row(repository)['resolution_status'] == 'LEGACY_UNVERIFIED'
     assert row(repository)['resolution_sha256'] is None
     assert repository.live_model_calibration_samples('OLD', horizon_minutes=60) == ()
-    assert repository.database.schema_version() == 13
-    assert list((tmp_path/'backups').glob('*before-v13*'))
+    assert repository.database.schema_version() == 14
+    assert list((tmp_path/'backups').glob('*before-v14*'))
 
 
 def test_concurrent_resolvers_finalize_only_once(repo):

@@ -28,7 +28,9 @@ from .replay import ReplayDataset, evaluate_replay_cut
 from .temporal_contract import (
     ANCHOR_VERSION, BAR, maturity as replay_target_close, scheduled_cut,
 )
-from ..services.directional_collection import HORIZON_MINUTES, cut_forecasts
+from ..services.directional_collection import (
+    HORIZON_MINUTES, NO_VALID_PLAN, cut_forecasts, valid_unavailable_plan,
+)
 from ..services.model_observations import (
     canonical,
     exact_closed_prices,
@@ -39,7 +41,8 @@ from ..services.scenario_calibration import outcome_class
 
 LEGACY_HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V1"
 PREVIOUS_HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V2"
-HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V3"
+EXECUTION_HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V3"
+HISTORICAL_REPLAY_CONTRACT = "XNYS_1100_HISTORICAL_CAUSAL_REPLAY_V4"
 DEFAULT_PARAMETERS = {
     "minimum_probability": 0.55,
     "stop_atr_multiple": 2.25,
@@ -158,12 +161,13 @@ def _cross_asset(analysis, symbol, dataset, peer_dataset, cut):
     if peer_dataset is None:
         return apply_cross_context(analysis, unavailable(symbol, "peer histórico no suministrado"))
     try:
+        month_start = (cut.tz_convert(NY) - pd.DateOffset(months=1)).normalize()
         context = build_cross_context(
             symbol,
             dataset.daily,
             peer_dataset.daily,
-            dataset.intraday,
-            peer_dataset.intraday,
+            dataset.intraday.loc[month_start:cut],
+            peer_dataset.intraday.loc[month_start:cut],
             as_of=cut,
         )
     except Exception as exc:  # a missing peer cut must not destroy the primary replay
@@ -180,6 +184,7 @@ def _cut_record(
     dataset_sha256,
     intraday_closes,
     daily_closes,
+    selected_horizons,
 ):
     analysis = evaluate_replay_cut(
         dataset,
@@ -193,6 +198,7 @@ def _cut_record(
         parameters,
         cut.to_pydatetime(),
         protocol=HISTORICAL_REPLAY_CONTRACT,
+        horizon_minutes=selected_horizons,
     )
     horizons = []
     shared_replay = None
@@ -207,8 +213,13 @@ def _cut_record(
         due = replay_target_close(cut, minutes)
         scenario_contract = metadata["scenario_contract"]
         operational_contract = metadata["operational_contract"]
-        if due.isoformat() != operational_contract["timeout_at"]:
+        if operational_contract is not None and due.isoformat() != operational_contract["timeout_at"]:
             raise ValueError("El vencimiento direccional difiere del operativo.")
+        # Live may legitimately emit a directional forecast without valid
+        # TP/SL barriers. Retain that cut; never fabricate an entry or outcome.
+        no_plan = operational_contract is None
+        if no_plan and not valid_unavailable_plan(metadata, analysis.last_price):
+            raise ValueError("Corte sin plan operativo carece de justificación verificable.")
         horizons.append({
             "label": next(label for label, value in HORIZON_MINUTES.items() if value == minutes),
             "horizon_minutes": minutes,
@@ -224,13 +235,22 @@ def _cut_record(
                 dataset.as_of,
             ),
             "operational_contract": operational_contract,
-            "operational_result": _operational_label(operational_contract, dataset),
+            "operational_status": metadata["operational_status"],
+            "primary_validation_target": metadata["primary_validation_target"],
+            "invalid_plan_levels": metadata["invalid_plan_levels"],
+            "operational_result": (
+                {"status": "NOT_APPLICABLE_NO_PLAN", "outcome": None}
+                if no_plan else _operational_label(operational_contract, dataset)
+            ),
             # The first-passage barrier is a separate hypothetical population.
             # A possible limit fill must precede any executable outcome.
-            "execution_result": assess_execution_path(
+            "execution_result": ({
+                "version": EXECUTION_VERSION, "status": NO_VALID_PLAN,
+                "eligible": False, "outcome": None,
+            } if no_plan else assess_execution_path(
                 operational_contract, dataset.intraday, dataset.as_of,
                 daily_bars=dataset.daily,
-            ).as_record(),
+            ).as_record()),
         })
     cut_payload = {
         "cut_id": _sha({
@@ -265,6 +285,8 @@ def build_historical_replay(
     start=None,
     end=None,
     max_cuts: int | None = None,
+    horizon_minutes=None,
+    progress=None,
 ):
     """Replay fixed historical cuts and label their future path causally.
 
@@ -287,6 +309,11 @@ def build_historical_replay(
         raise ValueError("stop_atr_multiple debe estar entre 2.0 y 2.5.")
     if max_cuts is not None and (isinstance(max_cuts, bool) or int(max_cuts) <= 0):
         raise ValueError("max_cuts debe ser positivo.")
+    selected = list(HORIZON_MINUTES.values()) if horizon_minutes is None else list(horizon_minutes)
+    if (not selected or len(set(selected)) != len(selected)
+            or any(isinstance(value, bool) or value not in HORIZON_MINUTES.values() for value in selected)):
+        raise ValueError("Selector de horizontes histórico inválido.")
+    selected = [value for value in HORIZON_MINUTES.values() if value in selected]
 
     dataset_sha256 = dataset.fingerprint(symbol)
     intraday_closes = exact_closed_prices(dataset.intraday, dataset.as_of)
@@ -296,7 +323,7 @@ def build_historical_replay(
         cuts = cuts[-int(max_cuts):]
     observations = []
     rejected = Counter()
-    for cut in cuts:
+    for index, cut in enumerate(cuts, 1):
         try:
             observations.append(
                 _cut_record(
@@ -308,10 +335,13 @@ def build_historical_replay(
                     dataset_sha256,
                     intraday_closes,
                     daily_closes,
+                    selected,
                 )
             )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             rejected[str(exc)] += 1
+        if progress is not None:
+            progress(index, len(cuts), len(observations), sum(rejected.values()))
 
     deterministic = {
         "contract": HISTORICAL_REPLAY_CONTRACT,
@@ -324,6 +354,8 @@ def build_historical_replay(
         "requested_start": None if start is None else str(start),
         "requested_end": None if end is None else str(end),
         "max_cuts": None if max_cuts is None else int(max_cuts),
+        "selected_horizons": selected,
+        "input_window_policy": "MATCH_LIVE_INTRADAY_1MO_V1",
         "candidate_cuts": len(cuts),
         "observations": observations,
         "rejected": dict(sorted(rejected.items())),
@@ -339,6 +371,8 @@ def build_historical_replay(
             "requested_start": deterministic["requested_start"],
             "requested_end": deterministic["requested_end"],
             "max_cuts": deterministic["max_cuts"],
+            "selected_horizons": selected,
+            "input_window_policy": deterministic["input_window_policy"],
         }),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -353,33 +387,57 @@ def validate_historical_replay(payload) -> bool:
 
     if (not isinstance(payload, dict) or payload.get("contract") not in {
             LEGACY_HISTORICAL_REPLAY_CONTRACT,
-            PREVIOUS_HISTORICAL_REPLAY_CONTRACT, HISTORICAL_REPLAY_CONTRACT}):
+            PREVIOUS_HISTORICAL_REPLAY_CONTRACT, EXECUTION_HISTORICAL_REPLAY_CONTRACT,
+            HISTORICAL_REPLAY_CONTRACT}):
         raise ValueError("Contrato de replay histórico desconocido.")
     observations = payload.get("observations")
     if not isinstance(observations, list):
         raise ValueError("Observaciones históricas inválidas.")
+    explicit_scope = "selected_horizons" in payload or "input_window_policy" in payload
+    if explicit_scope and (
+            payload.get("contract") != HISTORICAL_REPLAY_CONTRACT
+            or "selected_horizons" not in payload
+            or payload.get("input_window_policy") != "MATCH_LIVE_INTRADAY_1MO_V1"):
+        raise ValueError("Alcance temporal de replay incompleto o desconocido.")
     for item in observations:
         if not isinstance(item, dict) or item.get("cut_sha256") != _sha({
             key: value for key, value in item.items() if key != "cut_sha256"
         }):
             raise ValueError("Firma de corte histórico inválida.")
-        if len(item.get("horizons", ())) != len(HORIZON_MINUTES):
-            raise ValueError("Un corte histórico debe contener seis horizontes.")
-        if payload.get("contract") == HISTORICAL_REPLAY_CONTRACT:
+        # Backward-compatible six-horizon envelopes retain their original
+        # hash domain. Missing scope can NEVER imply a two-horizon pilot.
+        expected = payload.get("selected_horizons") if explicit_scope else list(HORIZON_MINUTES.values())
+        if (not isinstance(expected, list) or not expected or len(set(expected)) != len(expected)
+                or any(value not in HORIZON_MINUTES.values() for value in expected)
+                or [row.get("horizon_minutes") for row in item.get("horizons", ())] != expected):
+            raise ValueError("Un corte histórico no coincide con los horizontes preregistrados.")
+        if payload.get("contract") in {EXECUTION_HISTORICAL_REPLAY_CONTRACT, HISTORICAL_REPLAY_CONTRACT}:
             if any(not isinstance(row.get("execution_result"), dict)
                    or not row["execution_result"].get("status")
                    or row["execution_result"].get("version") != EXECUTION_VERSION
                    for row in item["horizons"]):
                 raise ValueError("Replay V3 sin evaluación de ejecución versionada.")
+        if payload.get("contract") == HISTORICAL_REPLAY_CONTRACT:
+            for row in item["horizons"]:
+                if row.get("operational_contract") is None:
+                    reference = (row.get("invalid_plan_levels") or {}).get("entry_price")
+                    if (not valid_unavailable_plan(row, reference)
+                            or row["operational_result"].get("status") != "NOT_APPLICABLE_NO_PLAN"
+                            or row["operational_result"].get("outcome") is not None
+                            or row["execution_result"].get("status") != NO_VALID_PLAN
+                            or row["execution_result"].get("eligible") is not False):
+                        raise ValueError("Replay sin plan inventa evidencia operativa.")
     deterministic_keys = (
         "contract", "symbol", "dataset_sha256", "peer_dataset_sha256",
         "parameters", "requested_start", "requested_end", "max_cuts",
         "candidate_cuts", "observations", "rejected", "separation_policy",
     )
     deterministic = {key: payload.get(key) for key in deterministic_keys}
+    if explicit_scope:
+        deterministic.update({key: payload.get(key) for key in ("selected_horizons", "input_window_policy")})
     if payload.get("content_sha256") != _sha(deterministic):
         raise ValueError("Firma del replay histórico inválida.")
-    expected_replay_id = _sha({
+    identity = {
         "contract": payload["contract"],
         "symbol": payload.get("symbol"),
         "dataset_sha256": payload.get("dataset_sha256"),
@@ -387,7 +445,10 @@ def validate_historical_replay(payload) -> bool:
         "requested_start": payload.get("requested_start"),
         "requested_end": payload.get("requested_end"),
         "max_cuts": payload.get("max_cuts"),
-    })
+    }
+    if explicit_scope:
+        identity.update({key: payload.get(key) for key in ("selected_horizons", "input_window_policy")})
+    expected_replay_id = _sha(identity)
     if payload.get("replay_id") != expected_replay_id:
         raise ValueError("Identidad del replay histórico inválida.")
     if payload.get("artifact_sha256") != _sha({

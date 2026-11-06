@@ -69,6 +69,13 @@ def test_pdf_report_is_valid_and_contains_executive_and_technical_sections() -> 
     assert len(reader.pages) >= 4
 
 
+def test_pdf_header_discloses_the_actual_feed_instead_of_assuming_yahoo() -> None:
+    payload = build_executive_report(_analysis(), data_source="respaldo local SHA-256")
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(payload)).pages)
+    assert "Fuente del análisis: respaldo local SHA-256" in text
+    assert "Fuente: Yahoo Finance / yfinance" not in text
+
+
 def test_pdf_technical_charts_are_built_from_real_indicator_frames() -> None:
     analysis = _analysis()
     charts = build_technical_pdf_charts(analysis, width=493)

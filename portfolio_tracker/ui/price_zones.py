@@ -227,6 +227,7 @@ def render_price_zones(analysis: "ProbabilityAnalysis", zone_snapshot=None, *, r
         session = market_session_status()
         if not session.is_open:
             st.info(session.message, icon=":material/schedule:")
+        st.markdown("**Toque de niveles · desde este corte hasta el cierre de hoy · PRELIMINAR**")
         with st.container(key="quant_three_panels"):
             current, left, right = st.columns(3, gap="small", vertical_alignment="top", border=True, wrap=False)
             with current:
@@ -251,6 +252,10 @@ def render_price_zones(analysis: "ProbabilityAnalysis", zone_snapshot=None, *, r
             with right:
                 st.markdown("**Subida**" if reference_only else "**Zona de venta / Objetivos y resistencia**")
                 _render_list(sales, price, estimates[3:], compact=reference_only)
+        st.caption(
+            "El toque mide si el precio alcanza cada nivel antes del cierre. "
+            "No es el sesgo direccional ni una autorización de compra; puede tocar niveles de ambos lados."
+        )
         extended = tuple(getattr(snapshot, "extended_levels", ()) or ())
         if not extended:
             extended = projected_extended_levels(analysis, snapshot)

@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.pytest_*/
 logs/
 *.py[cod]
 
@@ -22,9 +23,25 @@ tmp/
 backups/*
 !backups/.gitkeep
 !backups/portfolio.db.aesgcm
+!backups/receipts.aesgcm
 !backups/manifest.json
 *.bak
 *.zip
 
 # La estructura SQL sí se versiona; jamás contiene registros del usuario.
 database/*.db
+
+# Licensed historical research data stays local; never upload provider bars.
+output/historical_provider_samples/
+output/historical_acquisition/
+output/historical_replay/input/
+output/historical_replay/smoke_1h_1d/
+output/historical_replay/pilot_1h_1d/
+output/historical_replay/pilot_report/
+output/historical_replay/trigger_audit/
+output/historical_replay/
+output/pdf/
+output/prospective_research/
+
+# Capturas prospectivas, titulares licenciados y bóveda DPAPI: solo locales.
+output/prospective_archive/

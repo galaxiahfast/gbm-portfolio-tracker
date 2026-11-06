@@ -73,6 +73,7 @@ def cut_forecasts(
     *,
     protocol=COLLECTION_PROTOCOL,
     input_artifacts=None,
+    horizon_minutes=None,
 ):
     """Build one signed six-horizon contract from an exact 11 NY cut.
 
@@ -97,10 +98,15 @@ def cut_forecasts(
         analysis, observed_at=observed_at, protocol=protocol,
         input_artifacts=input_artifacts,
     )
+    selected = set(HORIZON_MINUTES.values()) if horizon_minutes is None else set(horizon_minutes)
+    if not selected or not selected <= set(HORIZON_MINUTES.values()):
+        raise ValueError("Selector de horizontes no soportado.")
     rows = []
     from portfolio_tracker.analytics.horizon_models import model_feature_contract
     from .model_execution_record import technical_horizon
     for label, minutes in HORIZON_MINUTES.items():
+        if minutes not in selected:
+            continue
         horizon = horizons[label]
         model_prediction = prediction_snapshot(technical_horizon(analysis, label))
         contract = make_scenario_contract(analysis.symbol, horizon, minutes, model_parameters)

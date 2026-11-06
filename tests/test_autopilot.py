@@ -68,7 +68,7 @@ def test_refuse_outdated_operational_schema_before_scheduled_work(tmp_path):
     PortfolioRepository(database).ensure_zone_forward_schema()
     with database.transaction() as connection:
         connection.execute("DELETE FROM schema_migrations WHERE version=12")
-    with pytest.raises(ValueError, match="se requiere v13"):
+    with pytest.raises(ValueError, match="se requiere v14"):
         runtime.open_repository(target)
 
 

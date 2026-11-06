@@ -59,22 +59,30 @@ def main(argv=None):
         )
     )
     parser.add_argument("--symbols", nargs="+", default=["SMCI", "NVDA"])
+    parser.add_argument("--run-symbols", nargs="+", help="Evaluate only these symbols, retaining all --symbols as causal peers.")
     parser.add_argument("--cache-dir", type=Path, default=DATA_DIR / "autopilot" / "market")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "output" / "historical_replay")
     parser.add_argument("--start")
     parser.add_argument("--end")
     parser.add_argument("--as-of")
     parser.add_argument("--max-cuts", type=int)
+    parser.add_argument("--horizons", type=int, nargs="+", choices=[60, 360, 1440, 10080, 43200, 259200])
+    parser.add_argument("--progress", action="store_true")
     parser.add_argument("--stop-atr-multiple", type=float, default=2.25)
     args = parser.parse_args(argv)
 
     symbols = tuple(dict.fromkeys(normalize_symbol(value) for value in args.symbols))
+    run_symbols = symbols if args.run_symbols is None else tuple(normalize_symbol(value) for value in args.run_symbols)
+    if not set(run_symbols) <= set(symbols):
+        parser.error("--run-symbols debe pertenecer a --symbols.")
     datasets = {
         symbol: load_dataset(args.cache_dir.resolve(), symbol, args.as_of)
         for symbol in symbols
     }
     outputs = []
     for symbol, dataset in datasets.items():
+        if symbol not in run_symbols:
+            continue
         peer = datasets.get(PEERS.get(symbol, ""))
         payload = build_historical_replay(
             symbol,
@@ -88,6 +96,10 @@ def main(argv=None):
             start=args.start,
             end=args.end,
             max_cuts=args.max_cuts,
+            horizon_minutes=args.horizons,
+            progress=(lambda done, total, valid, rejected: print(
+                f"{symbol}: {done}/{total}; conservados={valid}; rechazados={rejected}", flush=True
+            ) if done == 1 or done % 10 == 0 or done == total else None) if args.progress else None,
         )
         destination = args.output_dir.resolve() / f"{symbol}_{payload['replay_id'][:16]}.json"
         write_historical_replay(payload, destination)

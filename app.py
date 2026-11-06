@@ -34,7 +34,6 @@ from portfolio_tracker.analytics.fundamental_news import (
     snapshot_to_payload,
 )
 from portfolio_tracker.analytics.probability_calibration import calibrate_scenarios
-from portfolio_tracker.analytics.risk import concentration_warnings
 from portfolio_tracker.analytics.multi_timeframe import MacroTrend, calculate_15_day_projection
 from portfolio_tracker.analytics.directional_probability import fifteen_day_up_score
 from portfolio_tracker.analytics.technical_probability import (
@@ -53,6 +52,7 @@ from portfolio_tracker.db import Database
 from portfolio_tracker.models import (
     CashMovementKind,
     FxQuote,
+    PortfolioSummary,
     PriceQuote,
     ReportedTotalType,
     TradeDraft,
@@ -70,6 +70,12 @@ from portfolio_tracker.services.market_data import (
 from portfolio_tracker.services.implementation_status import inspect_implementation_status
 from portfolio_tracker.services.ocr import GbmOcrExtractor, OcrUnavailableError
 from portfolio_tracker.services.portfolio import PortfolioCalculator
+from portfolio_tracker.services.lot_sale_simulator import open_buy_lots, simulate_lot_sale
+from portfolio_tracker.services.realized_performance import (
+    RealizedSale,
+    realized_gain_total,
+    realized_sales,
+)
 from portfolio_tracker.services.pdf_report import (
     build_executive_report,
     build_master_report,
@@ -97,8 +103,6 @@ from portfolio_tracker.services.receipt_storage import ReceiptStorage
 from portfolio_tracker.services.validation import validate_trade
 from portfolio_tracker.ui import (
     apply_premium_ui,
-    portfolio_history_chart,
-    premium_bar_chart,
     premium_line_chart,
 )
 from portfolio_tracker.ui.price_zones import render_operational_signal, render_price_zones
@@ -120,7 +124,7 @@ apply_premium_ui()
 
 
 @st.cache_resource
-def get_repository(schema_revision: int = 9) -> PortfolioRepository:
+def get_repository(schema_revision: int = 14) -> PortfolioRepository:
     database = Database(DB_PATH)
     database.initialize()
     if database.schema_version() < schema_revision:
@@ -252,16 +256,17 @@ def usd_metric(value: Decimal) -> str:
     return f"${money(value):,.2f}"
 
 
-def signed_delta(value: Decimal, suffix: str = "") -> str | None:
-    """Evita presentar un cero neutro como si fuera una ganancia."""
-
-    return None if value == 0 else f"{value:+,.2f}{suffix}"
-
-
 def mxn(value_usd: Decimal, fx: FxQuote | None) -> str:
     if fx is None:
         return "Tasa USD/MXN pendiente"
     return f"${money(value_usd * fx.rate):,.2f} MXN"
+
+
+def usd_mxn_metric(value_usd: Decimal, fx: FxQuote | None) -> str:
+    """Presenta ambos importes sin confundir la conversión con efectivo adicional."""
+
+    converted = mxn(value_usd, fx) if fx is not None else "N/D MXN"
+    return f"{usd_metric(value_usd)} USD / {converted}"
 
 
 def local_datetime(value: str) -> datetime:
@@ -275,7 +280,8 @@ def page_intro(title: str, description: str) -> None:
     with st.container(key="page_header"):
         st.markdown(":material/monitoring:  GBM+ · PORTFOLIO INTELLIGENCE")
         st.title(title, anchor=False)
-        st.caption(description)
+        if description:
+            st.caption(description)
 
 
 def show_market_notice() -> None:
@@ -511,11 +517,84 @@ def trade_form(
     )
 
 
-def dashboard(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None:
-    page_intro(
-        "Resumen del portafolio",
-        "Patrimonio, efectivo, posiciones y rendimiento con valuación USD/MXN.",
+def render_open_holdings_value(
+    summary: PortfolioSummary,
+    prices: dict[str, PriceQuote],
+    fx_quote: FxQuote | None,
+) -> None:
+    """Muestra valor y resultado sin vender; nunca usa el último trade como cotización."""
+
+    if not summary.positions:
+        return
+
+    rows = []
+    market_value = Decimal("0")
+    unrealized = Decimal("0")
+    for position in summary.positions:
+        quote = prices.get(position.symbol)
+        if quote is None or not quote.price_usd.is_finite() or quote.price_usd <= 0:
+            rows.append({
+                "Emisora": position.symbol,
+                "Acciones": float(position.quantity),
+                "Precio disponible (USD)": None,
+                "Valor actual (USD)": None,
+                "Valor actual (MXN)": None,
+                "Ganancia/pérdida sin vender (USD)": None,
+                "Corte": "Sin cotización",
+            })
+            continue
+        value = money(position.quantity * quote.price_usd)
+        pnl = money(value - position.cost_basis_usd)
+        market_value += value
+        unrealized += pnl
+        observed_at = quote.observed_at
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=timezone.utc)
+        rows.append({
+            "Emisora": position.symbol,
+            "Acciones": float(position.quantity),
+            "Precio disponible (USD)": float(quote.price_usd),
+            "Valor actual (USD)": float(value),
+            "Valor actual (MXN)": float(money(value * fx_quote.rate)) if fx_quote else None,
+            "Ganancia/pérdida sin vender (USD)": float(pnl),
+            "Corte": observed_at.astimezone(LOCAL_TIMEZONE).strftime("%d/%m/%Y %H:%M"),
+        })
+
+    quoted = sum(row["Valor actual (USD)"] is not None for row in rows)
+    st.subheader("Tus acciones al último precio disponible", anchor=False)
+    with st.container(key="portfolio_holdings_metrics"):
+        with st.container(horizontal=True):
+            st.metric(
+                "Valor de tus acciones",
+                usd_mxn_metric(market_value, fx_quote) if quoted == len(rows) else "N/D",
+                border=True,
+                help=(
+                    "Valor al último precio disponible, no cotización tick a tick; "
+                    "la conversión a pesos es informativa."
+                    if quoted == len(rows) else "Falta cotización para alguna posición."
+                ),
+            )
+            st.metric(
+                "Ganancia/pérdida sin vender",
+                usd_mxn_metric(unrealized, fx_quote) if quoted == len(rows) else "N/D",
+                border=True,
+                help="Valor de las acciones menos costo de las compras aún abiertas, incluidas sus comisiones. No es ganancia realizada.",
+            )
+    st.dataframe(
+        pd.DataFrame(rows), hide_index=True,
+        column_config={
+            "Acciones": st.column_config.NumberColumn(format="%.4f"),
+            "Precio disponible (USD)": st.column_config.NumberColumn(format="$%.2f"),
+            "Valor actual (USD)": st.column_config.NumberColumn(format="$%.2f"),
+            "Valor actual (MXN)": st.column_config.NumberColumn(format="$%.2f"),
+            "Ganancia/pérdida sin vender (USD)": st.column_config.NumberColumn(format="$%.2f"),
+        },
     )
+
+
+@st.fragment(run_every="5m")
+def dashboard(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None:
+    page_intro("Resumen del portafolio", "")
     show_market_notice()
     trades = repository.list_trades(ascending=True)
     symbols = sorted({str(trade["symbol"]) for trade in trades})
@@ -525,87 +604,42 @@ def dashboard(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None
         cash_movements=repository.list_cash_movements(),
         prices=prices,
     )
-
-    total_pnl = summary.total_pnl_usd
-    result_label = (
-        "Ganancia total actual"
-        if total_pnl > 0
-        else "Pérdida total actual"
-        if total_pnl < 0
-        else "Resultado total actual"
+    sales = realized_sales(trades, timezone=LOCAL_TIMEZONE)
+    today_local = datetime.now(LOCAL_TIMEZONE)
+    total_gain = realized_gain_total(sales)
+    month_gain = realized_gain_total(
+        sales, year=today_local.year, month=today_local.month,
     )
-    result_color = "green" if total_pnl > 0 else "red" if total_pnl < 0 else "gray"
-    with st.container(border=True):
-        st.badge(
-            "GANANCIA" if total_pnl > 0 else "PÉRDIDA" if total_pnl < 0 else "SIN CAMBIO",
-            color=result_color,
-            icon=(
-                ":material/trending_up:"
-                if total_pnl > 0
-                else ":material/trending_down:"
-                if total_pnl < 0
-                else ":material/trending_flat:"
-            ),
-        )
-        st.metric(
-            result_label,
-            usd_metric(total_pnl),
-            delta=signed_delta(summary.total_return_pct, "% sobre aportaciones"),
-            delta_color="normal",
-            help=mxn(total_pnl, fx_quote),
-        )
-        st.caption(
-            f"Realizado: {usd_metric(summary.realized_pnl_usd)} · "
-            f"Posiciones abiertas: {usd_metric(summary.unrealized_pnl_usd)} · "
-            f"Comisiones acumuladas: {usd_metric(summary.commissions_usd)}"
-        )
 
-    with st.container(horizontal=True):
-        st.metric(
-            "Patrimonio",
-            usd_metric(summary.equity_usd),
-            signed_delta(summary.total_return_pct, "%"),
-            border=True,
-            icon=":material/account_balance_wallet:",
-            help=mxn(summary.equity_usd, fx_quote),
-        )
-        st.metric(
-            "Efectivo", usd_metric(summary.cash_usd), border=True,
-            icon=":material/payments:", help=mxn(summary.cash_usd, fx_quote)
-        )
-        st.metric(
-            "Efectivo equivalente MXN",
-            (
-                f"${money(summary.cash_usd * fx_quote.rate):,.2f} MXN"
-                if fx_quote else "N/D"
-            ),
-            border=True,
-            icon=":material/currency_exchange:",
-            help=(
-                f"Conversión informativa al tipo USD/MXN {fx_quote.rate:,.4f}. "
-                "No representa un saldo separado en pesos."
-                if fx_quote else "No hay un tipo de cambio disponible."
-            ),
-        )
-        st.metric(
-            "Posiciones", usd_metric(summary.holdings_value_usd), border=True,
-            icon=":material/candlestick_chart:", help=mxn(summary.holdings_value_usd, fx_quote)
-        )
-        st.metric(
-            "Comisiones", usd_metric(summary.commissions_usd), border=True,
-            icon=":material/receipt_long:", help=mxn(summary.commissions_usd, fx_quote)
-        )
+    with st.container(key="portfolio_summary_metrics"):
+        with st.container(horizontal=True):
+            st.metric(
+                "Patrimonio",
+                usd_mxn_metric(summary.equity_usd, fx_quote),
+                border=True,
+                icon=":material/account_balance_wallet:",
+                help=mxn(summary.equity_usd, fx_quote),
+            )
+            st.metric(
+                "Comisiones", usd_mxn_metric(summary.commissions_usd, fx_quote), border=True,
+                icon=":material/receipt_long:",
+                help="Total de comisiones registradas; conversión a MXN informativa.",
+            )
 
-    with st.container(horizontal=True):
-        st.metric(
-            "P&L realizado", usd_metric(summary.realized_pnl_usd),
-            delta=signed_delta(summary.realized_pnl_usd, " USD"), border=True
-        )
-        st.metric(
-            "P&L no realizado", usd_metric(summary.unrealized_pnl_usd),
-            delta=signed_delta(summary.unrealized_pnl_usd, " USD"), border=True
-        )
-        st.metric("Aportaciones netas", usd_metric(summary.net_contributions_usd), border=True)
+        with st.container(horizontal=True):
+            st.metric(
+                "Ganancia neta total", usd_mxn_metric(total_gain, fx_quote) if total_gain is not None else "N/D",
+                border=True, icon=":material/trending_up:",
+                help="Resultado realizado de todas las ventas, después de comisiones de compra y venta.",
+            )
+            st.metric(
+                "Ganancia neta del mes", usd_mxn_metric(month_gain, fx_quote) if month_gain is not None else "N/D",
+                border=True, icon=":material/calendar_month:",
+                help="Resultado de ventas ejecutadas en el mes actual; se reinicia cada mes.",
+            )
+    render_open_holdings_value(summary, prices, fx_quote)
+    if total_gain is not None and total_gain != summary.realized_pnl_usd:
+        st.warning("El desglose por ventas no concuerda con el total contable; revisa el historial.")
 
     if fx_quote:
         repository.add_portfolio_snapshot(
@@ -615,72 +649,10 @@ def dashboard(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None
             fx_rate=fx_quote.rate,
         )
 
-    left, right = st.columns([1.6, 1])
-    with left.container(border=True):
-        st.subheader("Posiciones abiertas", anchor=False)
-        if summary.positions:
-            rows: list[dict[str, Any]] = []
-            for position in summary.positions:
-                weight = (
-                    position.market_value_usd / summary.holdings_value_usd
-                    if summary.holdings_value_usd else Decimal("0")
-                )
-                rows.append({
-                    "Emisora": position.symbol,
-                    "Títulos": float(position.quantity),
-                    "Costo promedio": float(position.average_cost_usd),
-                    "Precio actual": float(position.current_price_usd),
-                    "Valor": float(position.market_value_usd),
-                    "P&L abierto": float(position.unrealized_pnl_usd),
-                    "Peso": float(weight),
-                })
-            st.dataframe(
-                pd.DataFrame(rows), width="stretch", hide_index=True,
-                column_config={
-                    "Títulos": st.column_config.NumberColumn(format="%.6f"),
-                    "Costo promedio": st.column_config.NumberColumn(format="$%.2f"),
-                    "Precio actual": st.column_config.NumberColumn(format="$%.2f"),
-                    "Valor": st.column_config.NumberColumn(format="$%.2f"),
-                    "P&L abierto": st.column_config.NumberColumn(format="$%.2f"),
-                    "Peso": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
-                },
-            )
-        else:
-            st.info("Registra una compra para comenzar a construir posiciones.")
+    render_trade_history(trades, sales)
+    render_lot_sale_simulator(trades, prices)
 
-    with right.container(border=True):
-        st.subheader("Distribución", anchor=False)
-        if summary.positions:
-            allocation = pd.DataFrame({
-                "Emisora": [item.symbol for item in summary.positions],
-                "Valor USD": [float(item.market_value_usd) for item in summary.positions],
-            }).set_index("Emisora")
-            premium_bar_chart(allocation, height=300, key="portfolio_allocation")
-        else:
-            st.info("Sin distribución disponible.")
-
-    with st.container(border=True):
-        st.subheader("Evolución registrada", anchor=False)
-        snapshots = repository.list_portfolio_snapshots()
-        if len(snapshots) >= 2:
-            history = pd.DataFrame({
-                "Fecha": [local_datetime(row["observed_at"]) for row in snapshots],
-                "Patrimonio": [float(row["equity_usd"]) for row in snapshots],
-                "Efectivo": [float(row["cash_usd"]) for row in snapshots],
-                "Posiciones": [float(row["holdings_value_usd"]) for row in snapshots],
-            }).set_index("Fecha")
-            first_value = history["Patrimonio"].iloc[0]
-            last_value = history["Patrimonio"].iloc[-1]
-            st.caption(
-                f"Patrimonio inicial registrado: ${first_value:,.2f} USD · "
-                f"Último: ${last_value:,.2f} USD · "
-                "áreas apiladas = efectivo + posiciones."
-            )
-            portfolio_history_chart(history, height=340, key="portfolio_history")
-        else:
-            st.info("La serie crecerá conforme se registren nuevas valuaciones.")
-
-    for warning in summary.warnings + price_failures + concentration_warnings(summary):
+    for warning in summary.warnings + price_failures:
         st.warning(warning)
 
 
@@ -851,21 +823,16 @@ def cash_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None
         )
 
 
-def operations_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None:
-    page_intro("Operaciones", "Captura manual e historial contable de compras y ventas.")
-    new_operation_tab, trade_history_tab = st.tabs(
-        ["Nueva operación", "Historial"]
-    )
-    with new_operation_tab:
-        trade_form(repository, prefix="manual", fx_quote=fx_quote)
-
-    with trade_history_tab:
-        trades = repository.list_trades()
+def render_trade_history(
+    trades: list[dict[str, Any]], sales: tuple[RealizedSale, ...],
+) -> None:
+    with st.container(border=True):
+        st.subheader("Historial de operaciones", anchor=False)
         if not trades:
             st.info("No hay operaciones registradas.")
             return
+        gain_by_id = {sale.trade_id: sale.gain_usd for sale in sales}
         frame = pd.DataFrame([{
-            "ID": row["id"],
             "Fecha": local_datetime(row["executed_at"]).strftime("%d/%m/%Y %H:%M"),
             "Emisora": row["symbol"],
             "Operación": "Compra" if row["side"] == "BUY" else "Venta",
@@ -873,9 +840,12 @@ def operations_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -
             "Precio": float(row["price_usd"]),
             "Bruto": float(row["gross_usd"]),
             "Comisión": float(row["commission_usd"]),
+            "Ganancia neta": (
+                float(money(gain_by_id[row["id"]]))
+                if gain_by_id.get(row["id"]) is not None else None
+            ),
             "Validación": row["validation_status"],
-            "Imagen": "Sí" if row["receipt_id"] else "No",
-        } for row in trades])
+        } for row in reversed(trades)])
         st.dataframe(
             frame, width="stretch", hide_index=True,
             column_config={
@@ -883,39 +853,137 @@ def operations_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -
                 "Precio": st.column_config.NumberColumn(format="$%.2f"),
                 "Bruto": st.column_config.NumberColumn(format="$%.2f"),
                 "Comisión": st.column_config.NumberColumn(format="$%.2f"),
+                "Ganancia neta": st.column_config.NumberColumn(
+                    "Ganancia neta (USD)", format="$%.2f",
+                ),
             },
         )
-        with st.container(border=True):
-            st.subheader("Detalle", anchor=False)
-            selected_id = st.selectbox("Operación", [row["id"] for row in trades])
-            selected = next(row for row in trades if row["id"] == selected_id)
-            first, second = st.columns([1, 1])
-            with first:
-                st.json({
-                    "emisora": selected["symbol"], "producto": selected["product"],
-                    "lado": selected["side"], "titulos": str(selected["quantity"]),
-                    "precio_usd": str(selected["price_usd"]),
-                    "total_visible_usd": str(selected["reported_total_usd"] or ""),
-                    "interpretacion_total": selected.get("reported_total_type", "GROSS"),
-                    "comision_usd": str(selected["commission_usd"]),
-                    "notas": selected["notes"],
-                })
-            with second:
-                if selected.get("thumbnail_path"):
-                    image_path = PROJECT_ROOT / selected["thumbnail_path"]
-                    if image_path.exists():
-                        st.image(str(image_path), caption=selected["original_filename"], width=360)
-                else:
-                    st.info("Esta operación no tiene imagen vinculada.")
-            confirm_delete = st.checkbox(
-                "Entiendo que se eliminará la operación; la imagen se conservará para auditoría."
+
+
+def render_lot_sale_simulator(
+    trades: list[dict[str, Any]], prices: dict[str, PriceQuote],
+) -> None:
+    """Calcula un escenario por lote; el registro real sigue usando FIFO."""
+    try:
+        lots = open_buy_lots(trades)
+    except ValueError as exc:
+        st.warning(f"No se puede simular la venta: {exc}")
+        return
+    if not lots:
+        return
+
+    lots_by_id = {lot.trade_id: lot for lot in lots}
+    with st.expander("Simular venta de una compra específica"):
+        st.caption(
+            "Solo simulación: no envía órdenes ni modifica operaciones. "
+            "Las ventas sin lote asignado siguen FIFO; una asignación explícita consume la compra indicada."
+        )
+        with st.form("lot_sale_simulation"):
+            selected_id = st.selectbox(
+                "Compra que quieres analizar",
+                options=[lot.trade_id for lot in reversed(lots)],
+                format_func=lambda trade_id: (
+                    f"{lots_by_id[trade_id].symbol} · "
+                    f"{local_datetime(lots_by_id[trade_id].executed_at):%d/%m/%Y} · "
+                    f"{lots_by_id[trade_id].remaining_quantity:g} acciones · "
+                    f"compra #{trade_id}"
+                ),
             )
-            if st.button(
-                "Eliminar operación", disabled=not confirm_delete, icon=":material/delete:"
-            ):
-                if repository.delete_trade(int(selected_id)):
-                    st.toast("Operación eliminada; comprobante conservado")
-                    st.rerun()
+            lot = lots_by_id[selected_id]
+            quantity = st.number_input(
+                "Acciones a vender", min_value=0.000001,
+                max_value=float(lot.remaining_quantity),
+                value=float(lot.remaining_quantity), step=1.0, format="%.6f",
+            )
+            quote = prices.get(lot.symbol)
+            default_price = (
+                quote.price_usd if quote and quote.price_usd > 0
+                else lot.purchase_price_usd
+            )
+            sale_price = st.number_input(
+                "Precio hipotético de venta (USD por acción)",
+                min_value=0.01, value=float(default_price), step=0.01,
+                format="%.2f",
+            )
+            commission_rate = st.number_input(
+                "Comisión estimada de venta (%)", min_value=0.0,
+                value=0.25, step=0.01, format="%.2f",
+            )
+            submitted = st.form_submit_button("Calcular simulación")
+
+        if submitted:
+            try:
+                result = simulate_lot_sale(
+                    trades, buy_trade_id=selected_id,
+                    quantity=Decimal(str(quantity)),
+                    sale_price_usd=Decimal(str(sale_price)),
+                    commission_rate_pct=Decimal(str(commission_rate)),
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            st.write(
+                f"**Lote elegido:** resultado estimado "
+                f"**{'+' if result.selected_lot_gain_usd >= 0 else '-'}"
+                f"${abs(result.selected_lot_gain_usd):,.2f} USD** "
+                f"({result.quantity:g} acciones a ${result.sale_price_usd:,.2f})."
+            )
+            st.write(
+                f"Venta bruta ${result.gross_proceeds_usd:,.2f} − comisión "
+                f"${result.sale_commission_usd:,.2f} = "
+                f"${result.net_proceeds_usd:,.2f} netos. "
+                f"Costo del lote elegido, incluida la comisión de compra: "
+                f"${result.selected_lot_cost_usd:,.2f}."
+            )
+            st.info(
+                f"Si registraras esa misma venta en la app, FIFO asignaría "
+                f"un costo de ${result.fifo_cost_usd:,.2f} y una ganancia/pérdida "
+                f"estimada de {'+' if result.fifo_gain_usd >= 0 else '-'}"
+                f"${abs(result.fifo_gain_usd):,.2f} USD. "
+                "La simulación no cambia los lotes ni la ganancia realizada."
+            )
+
+
+def render_trade_management(repository: PortfolioRepository) -> None:
+    trades = repository.list_trades()
+    if not trades:
+        return
+    with st.expander("Ver detalle o eliminar una operación"):
+        selected_id = st.selectbox("Operación", [row["id"] for row in trades])
+        selected = next(row for row in trades if row["id"] == selected_id)
+        first, second = st.columns([1, 1])
+        with first:
+            st.json({
+                "emisora": selected["symbol"], "producto": selected["product"],
+                "lado": selected["side"], "titulos": str(selected["quantity"]),
+                "precio_usd": str(selected["price_usd"]),
+                "total_visible_usd": str(selected["reported_total_usd"] or ""),
+                "interpretacion_total": selected.get("reported_total_type", "GROSS"),
+                "comision_usd": str(selected["commission_usd"]),
+                "notas": selected["notes"],
+            })
+        with second:
+            if selected.get("thumbnail_path"):
+                image_path = PROJECT_ROOT / selected["thumbnail_path"]
+                if image_path.exists():
+                    st.image(str(image_path), caption=selected["original_filename"], width=360)
+            else:
+                st.info("Esta operación no tiene imagen vinculada.")
+        confirm_delete = st.checkbox(
+            "Entiendo que se eliminará la operación; la imagen se conservará para auditoría."
+        )
+        if st.button(
+            "Eliminar operación", disabled=not confirm_delete, icon=":material/delete:"
+        ):
+            if repository.delete_trade(int(selected_id)):
+                st.toast("Operación eliminada; comprobante conservado")
+                st.rerun()
+
+
+def operations_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None:
+    page_intro("Operaciones", "Captura manual de compras y ventas.")
+    trade_form(repository, prefix="manual", fx_quote=fx_quote)
+    render_trade_management(repository)
 
 
 def receipt_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None:
@@ -1236,6 +1304,11 @@ def _render_probability_executive(
         ]
     )
     st.subheader(f"Mapa de scores por horizonte{provisional}", anchor=False)
+    st.caption(
+        "Sesgo direccional (arriba / rango / abajo): scores heurísticos por horizonte, "
+        "no probabilidades calibradas de toque ni señales de entrada. "
+        "El toque de niveles anterior cubre únicamente desde el corte actual hasta el cierre de hoy."
+    )
     with st.container(horizontal=True, gap="small"):
         st.badge("Escenario alcista", icon=":material/trending_up:", color="green")
         st.badge("Escenario lateral", icon=":material/trending_flat:", color="blue")
@@ -1750,12 +1823,15 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
         )
     executive_pdf = build_executive_report(
         analysis, zone_snapshot=zone_snapshot, system_decision=system_decision,
+        data_source=market_frames.source,
     )
     technical_pdf = build_technical_report(
         analysis, zone_snapshot=zone_snapshot, system_decision=system_decision,
+        data_source=market_frames.source,
     )
     combined_pdf = build_probability_report(
         analysis, zone_snapshot=zone_snapshot, system_decision=system_decision,
+        data_source=market_frames.source,
     )
     calibration_context = {
         "backtest_run": repository.latest_backtest_run(symbol=analysis.symbol),
@@ -1764,7 +1840,7 @@ def _probability_predictor_content(*, live_mode: bool) -> None:
     }
     master_pdf = build_master_report(
         analysis, calibration_context, zone_snapshot=zone_snapshot,
-        system_decision=system_decision,
+        system_decision=system_decision, data_source=market_frames.source,
     )
     timestamp = analysis.as_of.strftime("%Y%m%d_%H%M")
     with actions_slot.container(border=False):

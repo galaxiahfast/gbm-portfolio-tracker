@@ -208,6 +208,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (11, "objetivo_operativo_tp_sl_timeout_inmutable"),
     (12, "checkpoints_operativos_incrementales_firmados"),
     (13, "observaciones_anclaje_temporal_v1"),
+    (14, "asignacion_explicita_lote_venta"),
 )
 
 
@@ -306,6 +307,8 @@ class Database:
                             self._create_operational_model_outcomes(connection)
                         elif version == 13:
                             self._upgrade_live_model_anchor(connection)
+                        elif version == 14:
+                            self._create_sale_lot_allocations(connection)
                     connection.execute(
                         """
                         INSERT INTO schema_migrations(version, name, applied_at)
@@ -328,7 +331,25 @@ class Database:
             self._create_operational_history(connection)
             self._secure_live_model_history(connection)
             self._create_operational_model_outcomes(connection)
+            self._create_sale_lot_allocations(connection)
             connection.commit()
+
+    @staticmethod
+    def _create_sale_lot_allocations(connection: sqlite3.Connection) -> None:
+        """Una venta puede consumir un lote elegido; sin fila conserva FIFO."""
+        connection.execute("""CREATE TABLE IF NOT EXISTS sale_lot_allocations (
+            sale_trade_id INTEGER PRIMARY KEY REFERENCES trades(id) ON DELETE RESTRICT,
+            buy_trade_id INTEGER NOT NULL REFERENCES trades(id) ON DELETE RESTRICT,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (sale_trade_id <> buy_trade_id)
+        )""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS sale_lot_allocation_no_update
+            BEFORE UPDATE ON sale_lot_allocations
+            BEGIN SELECT RAISE(ABORT, 'sale_lot_allocation_immutable'); END""")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS sale_lot_allocation_no_delete
+            BEFORE DELETE ON sale_lot_allocations
+            BEGIN SELECT RAISE(ABORT, 'sale_lot_allocation_immutable'); END""")
 
     @staticmethod
     def _secure_live_model_history(connection: sqlite3.Connection) -> None:

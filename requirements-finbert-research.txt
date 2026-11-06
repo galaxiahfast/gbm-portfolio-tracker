@@ -1,0 +1,6 @@
+# Offline research only; install after the historical headline entitlement pilot passes.
+# FinBERT weights and tokenizer are separately pinned to a Hugging Face commit
+# and SHA-256 recorded by scripts/build_headline_finbert_sidecar.py.
+torch==2.5.1
+transformers==4.46.3
+huggingface-hub==0.26.2

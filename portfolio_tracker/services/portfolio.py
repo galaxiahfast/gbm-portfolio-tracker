@@ -19,6 +19,7 @@ from ..models import (
 
 @dataclass(slots=True)
 class _Lot:
+    trade_id: int
     quantity: Decimal
     unit_cost_usd: Decimal
 
@@ -61,11 +62,26 @@ class PortfolioCalculator:
 
             if trade["side"] == TradeSide.BUY.value:
                 unit_cost = (gross + commission) / quantity
-                lots[symbol].append(_Lot(quantity, unit_cost))
+                lots[symbol].append(_Lot(int(trade["id"]), quantity, unit_cost))
                 continue
 
             remaining = quantity
             removed_cost = Decimal("0")
+            selected_buy_id = trade.get("allocated_buy_trade_id")
+            if selected_buy_id is not None:
+                chosen = next(
+                    (lot for lot in lots[symbol] if lot.trade_id == int(selected_buy_id)),
+                    None,
+                )
+                if chosen is None or chosen.quantity < remaining:
+                    raise ValueError(
+                        f"Operación {trade['id']}: el lote elegido no tiene títulos suficientes."
+                    )
+                removed_cost = remaining * chosen.unit_cost_usd
+                chosen.quantity -= remaining
+                if chosen.quantity == 0:
+                    lots[symbol].remove(chosen)
+                remaining = Decimal("0")
             while remaining > 0 and lots[symbol]:
                 lot = lots[symbol][0]
                 used = min(remaining, lot.quantity)

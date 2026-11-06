@@ -159,6 +159,14 @@ CREATE TABLE receipts (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE sale_lot_allocations (
+            sale_trade_id INTEGER PRIMARY KEY REFERENCES trades(id) ON DELETE RESTRICT,
+            buy_trade_id INTEGER NOT NULL REFERENCES trades(id) ON DELETE RESTRICT,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (sale_trade_id <> buy_trade_id)
+        );
+
 CREATE TABLE schema_migrations (
                     version INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -362,6 +370,14 @@ CREATE TRIGGER prevent_duplicate_trade_receipt_update
             BEGIN
                 SELECT RAISE(ABORT, 'receipt_already_linked');
             END;
+
+CREATE TRIGGER sale_lot_allocation_no_delete
+            BEFORE DELETE ON sale_lot_allocations
+            BEGIN SELECT RAISE(ABORT, 'sale_lot_allocation_immutable'); END;
+
+CREATE TRIGGER sale_lot_allocation_no_update
+            BEFORE UPDATE ON sale_lot_allocations
+            BEGIN SELECT RAISE(ABORT, 'sale_lot_allocation_immutable'); END;
 
 CREATE TRIGGER zone_daily_validation_no_delete BEFORE DELETE ON zone_daily_validation
                 BEGIN SELECT RAISE(ABORT, 'append-only evidence'); END;

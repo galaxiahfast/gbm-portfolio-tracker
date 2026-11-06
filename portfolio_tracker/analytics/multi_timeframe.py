@@ -316,8 +316,39 @@ def _latest_context_bias(frame: pd.DataFrame) -> float:
     return max(-1.0, min(1.0, sum(votes) / sum(abs(item) for item in votes)))
 
 
+SCORE_MAP_VERSION = "CONTINUOUS_CONTEXT_LOGIT_V2"
+
+
+def _projection_context_bias(frame: pd.DataFrame) -> float:
+    """Continuous display-only bias; the operational confluence vote is unchanged.
+
+    Hard +/-1 votes made every fully aligned EMA/MACD configuration identical.
+    ATR-normalized distances retain their magnitude without adding indicators.
+    """
+    if frame.empty:
+        return 0.0
+    latest = frame.iloc[-1]
+    close = float(latest.get("Close", float("nan")))
+    if not math.isfinite(close) or close <= 0:
+        return 0.0
+    scale = _atr(frame, close) if {"High", "Low", "Close"} <= set(frame.columns) else max(close * 0.015, 0.01)
+    components: list[tuple[float, float]] = []
+    for column, weight in (("EMA9", 1.0), ("EMA21", 1.2), ("EMA50", 1.4), ("EMA200", 1.6)):
+        value = float(latest.get(column, float("nan")))
+        if math.isfinite(value):
+            delta = close - value
+            components.append((weight * delta / (abs(delta) + scale), weight))
+    macd = float(latest.get("MACD", float("nan")))
+    macd_signal = float(latest.get("MACD_signal", float("nan")))
+    if math.isfinite(macd) and math.isfinite(macd_signal):
+        delta = macd - macd_signal
+        macd_scale = max(scale * 0.25, 0.001)
+        components.append((1.3 * delta / (abs(delta) + macd_scale), 1.3))
+    return sum(value for value, _ in components) / sum(weight for _, weight in components) if components else 0.0
+
+
 def _projection_distribution(bias: float, risk_veto: bool, short_term: bool) -> tuple[float, float, float]:
-    """Convierte sesgo en subida/rango/bajada conservando una suma exacta de 100."""
+    """Display scores only: smooth odds avoid a 70/26/4 clipping plateau."""
 
     bias = max(-1.0, min(1.0, bias))
     if risk_veto and short_term:
@@ -327,8 +358,7 @@ def _projection_distribution(bias: float, risk_veto: bool, short_term: bool) -> 
         range_probability += 12.0
     range_probability = max(22.0, min(62.0, range_probability))
     directional = 100.0 - range_probability
-    probability_up = directional * (0.5 + 0.5 * bias)
-    probability_up = round(max(4.0, min(directional - 4.0, probability_up)), 1)
+    probability_up = round(directional / (1.0 + math.exp(-3.0 * bias)), 1)
     probability_range = round(range_probability, 1)
     probability_down = round(100.0 - probability_up - probability_range, 1)
     return probability_up, probability_range, probability_down
@@ -428,11 +458,13 @@ def calculate_horizon_projections(
     """
 
     engine_bias = max(-1.0, min(1.0, (float(probability_up) - 50.0) / 35.0))
-    intraday_bias = _latest_context_bias(intraday)
-    hourly_bias = _latest_context_bias(hourly)
-    daily_bias = _latest_context_bias(daily)
-    weekly_bias = _latest_context_bias(weekly)
-    monthly_bias = _latest_context_bias(monthly)
+    # Only the presentation map uses continuous magnitudes. The confluence
+    # engine and every buy/sell threshold still use their existing rules.
+    intraday_bias = _projection_context_bias(intraday)
+    hourly_bias = _projection_context_bias(hourly)
+    daily_bias = _projection_context_bias(daily)
+    weekly_bias = _projection_context_bias(weekly)
+    monthly_bias = _projection_context_bias(monthly)
     definitions = (
         ("1 Hora", 0.70 * engine_bias + 0.30 * intraday_bias, True, intraday, 12.0, 36, "Intradía / microestructura"),
         ("6 Horas", 0.50 * engine_bias + 0.30 * intraday_bias + 0.20 * hourly_bias, True, hourly, 6.0, 20, "Intradía / microestructura"),

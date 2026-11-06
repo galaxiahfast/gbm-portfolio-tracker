@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -17,14 +18,18 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+import zipfile
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 MAGIC = b"GBM-SQLITE-AESGCM-v1\0"
 AAD = b"gbm-portfolio-tracker/sqlite-backup/v1"
+RECEIPTS_MAGIC = b"GBM-RECEIPTS-AESGCM-v1\0"
+RECEIPTS_AAD = b"gbm-portfolio-tracker/receipts-backup/v1"
 TRACKED_BACKUP_FILES = (
     "backups/portfolio.db.aesgcm",
+    "backups/receipts.aesgcm",
     "backups/manifest.json",
     "database/schema.sql",
 )
@@ -69,6 +74,27 @@ def decrypt_bytes(payload: bytes, key: bytes) -> bytes:
     return AESGCM(key).decrypt(nonce, payload[offset + 12 :], AAD)
 
 
+def encrypt_receipts(receipts_dir: Path, key: bytes) -> tuple[bytes, int]:
+    """Archive only receipt images, then authenticate and encrypt the archive."""
+    files = sorted(path for path in receipts_dir.rglob("*") if path.is_file()) if receipts_dir.exists() else []
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in files:
+            if path.is_symlink():
+                raise ValueError("No se respaldan enlaces simbólicos de comprobantes.")
+            archive.write(path, arcname=path.relative_to(receipts_dir).as_posix())
+    nonce = os.urandom(12)
+    return (RECEIPTS_MAGIC + nonce + AESGCM(key).encrypt(nonce, stream.getvalue(), RECEIPTS_AAD),
+            len(files))
+
+
+def decrypt_receipts(payload: bytes, key: bytes) -> bytes:
+    if not payload.startswith(RECEIPTS_MAGIC) or len(payload) <= len(RECEIPTS_MAGIC) + 12:
+        raise ValueError("Formato de respaldo de comprobantes no reconocido.")
+    offset = len(RECEIPTS_MAGIC)
+    return AESGCM(key).decrypt(payload[offset:offset + 12], payload[offset + 12:], RECEIPTS_AAD)
+
+
 def export_schema(database: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(database) as connection:
@@ -86,6 +112,7 @@ def export_schema(database: Path, destination: Path) -> None:
 
 def build_backup(database: Path, repo_root: Path, key: bytes) -> dict[str, object]:
     encrypted_path = repo_root / "backups" / "portfolio.db.aesgcm"
+    receipts_path = repo_root / "backups" / "receipts.aesgcm"
     manifest_path = repo_root / "backups" / "manifest.json"
     schema_path = repo_root / "database" / "schema.sql"
     encrypted_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,6 +124,10 @@ def build_backup(database: Path, repo_root: Path, key: bytes) -> dict[str, objec
     temporary = encrypted_path.with_suffix(".tmp")
     temporary.write_bytes(encrypted)
     temporary.replace(encrypted_path)
+    receipts_encrypted, receipts_count = encrypt_receipts(database.parent / "receipts", key)
+    receipts_temporary = receipts_path.with_suffix(".tmp")
+    receipts_temporary.write_bytes(receipts_encrypted)
+    receipts_temporary.replace(receipts_path)
     export_schema(database, schema_path)
     with sqlite3.connect(database) as connection:
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -108,6 +139,9 @@ def build_backup(database: Path, repo_root: Path, key: bytes) -> dict[str, objec
         "created_at": datetime.now(timezone.utc).isoformat(),
         "ciphertext_sha256": hashlib.sha256(encrypted).hexdigest(),
         "encrypted_bytes": len(encrypted),
+        "receipts_ciphertext_sha256": hashlib.sha256(receipts_encrypted).hexdigest(),
+        "receipts_encrypted_bytes": len(receipts_encrypted),
+        "receipts_count": receipts_count,
         "schema_migration": int(migration),
         "sqlite_user_version": schema_version,
     }

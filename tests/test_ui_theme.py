@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 import pandas as pd
@@ -74,3 +75,63 @@ def test_secondary_panels_hide_distractions_without_removing_calculations() -> N
     assert 'key="quant_core_metrics"' in source
     assert 'key="quant_buy_zone"' in source
     assert 'key="quant_sell_zone"' in source
+
+
+def test_portfolio_summary_shows_gains_and_read_only_trade_history_without_chart() -> None:
+    source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    functions = {
+        node.name: node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    dashboard = functions["dashboard"]
+    metric_labels = [
+        call.args[0].value
+        for call in ast.walk(dashboard)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "metric"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+    ]
+    assert len(metric_labels) == 4
+    assert set(metric_labels) == {
+        "Patrimonio", "Comisiones",
+        "Ganancia neta total", "Ganancia neta del mes",
+    }
+    dashboard_source = ast.get_source_segment(source, dashboard)
+    for amount in (
+        "summary.equity_usd", "summary.commissions_usd", "total_gain", "month_gain",
+    ):
+        assert f"usd_mxn_metric({amount}, fx_quote)" in dashboard_source
+    assert "render_trade_history(trades, sales)" in dashboard_source
+    assert 'page_intro("Resumen del portafolio", "")' in dashboard_source
+    assert "Ganancias realizadas al vender" not in dashboard_source
+    assert "pendientes de validación" not in dashboard_source
+    assert "concentration_warnings(summary)" not in dashboard_source
+    assert "Conversión informativa USD/MXN" not in source
+    assert "Precio de Yahoo Finance, actualizado" not in source
+    assert "render_realized_gain_chart" not in dashboard_source
+    assert "portfolio_history_chart" not in dashboard_source
+    assert "premium_bar_chart" not in dashboard_source
+    assert '"Posiciones abiertas"' not in dashboard_source
+    assert '"Distribución"' not in dashboard_source
+    assert '"P&L no realizado"' not in dashboard_source
+    assert '"Aportaciones netas"' not in dashboard_source
+
+    history_source = ast.get_source_segment(source, functions["render_trade_history"])
+    assert 'st.subheader("Historial de operaciones"' in history_source
+    assert '"Ganancia neta"' in history_source
+    assert "En compras la ganancia queda pendiente" not in history_source
+    assert "st.expander(" not in history_source
+    operations_source = ast.get_source_segment(source, functions["operations_page"])
+    assert "render_trade_history" not in operations_source
+    assert 'trade_form(repository, prefix="manual"' in operations_source
+    assert "render_trade_management(repository)" in operations_source
+
+
+def test_summary_currency_amounts_have_one_uniform_font() -> None:
+    for panel in ("portfolio_summary_metrics", "portfolio_holdings_metrics"):
+        assert f".st-key-{panel} [data-testid=\"stMetricValue\"]" in PREMIUM_CSS
+        assert f".st-key-{panel} [data-testid=\"stMetricValue\"] *" in PREMIUM_CSS
+    assert "font-size: inherit !important" in PREMIUM_CSS
