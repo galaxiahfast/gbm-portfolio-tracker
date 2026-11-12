@@ -45,3 +45,6 @@ output/prospective_research/
 
 # Capturas prospectivas, titulares licenciados y bóveda DPAPI: solo locales.
 output/prospective_archive/
+
+# Precios diarios descargados para el estudio de factores: solo locales.
+output/daily_study/data/

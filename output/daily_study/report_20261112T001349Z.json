@@ -1,0 +1,760 @@
+{
+ "payload": {
+  "version": "DAILY_FACTOR_STUDY_V1",
+  "generated_at_utc": "2026-11-12T00:13:49.067441+00:00",
+  "price_cache": "closes_20261112.csv.gz",
+  "price_cache_sha256": "290fc3ad85bb52fc52947d814f6cceaf5edc26ab583be110f2b5e00313686fc4",
+  "benchmark": "SPY",
+  "cash_proxy": "^IRX",
+  "universe_requested": 97,
+  "universe_used": [
+   "AAPL",
+   "MSFT",
+   "AMZN",
+   "GOOGL",
+   "META",
+   "NVDA",
+   "TSLA",
+   "BRK-B",
+   "JPM",
+   "JNJ",
+   "V",
+   "PG",
+   "UNH",
+   "HD",
+   "MA",
+   "XOM",
+   "CVX",
+   "PFE",
+   "KO",
+   "PEP",
+   "MRK",
+   "ABBV",
+   "AVGO",
+   "COST",
+   "WMT",
+   "DIS",
+   "CSCO",
+   "INTC",
+   "ORCL",
+   "ADBE",
+   "CRM",
+   "NFLX",
+   "AMD",
+   "QCOM",
+   "TXN",
+   "IBM",
+   "BA",
+   "CAT",
+   "GE",
+   "MMM",
+   "HON",
+   "UPS",
+   "LMT",
+   "RTX",
+   "DE",
+   "MCD",
+   "NKE",
+   "SBUX",
+   "LOW",
+   "TGT",
+   "BAC",
+   "WFC",
+   "C",
+   "GS",
+   "MS",
+   "AXP",
+   "BLK",
+   "SCHW",
+   "USB",
+   "PNC",
+   "T",
+   "VZ",
+   "CMCSA",
+   "TMO",
+   "ABT",
+   "DHR",
+   "BMY",
+   "AMGN",
+   "GILD",
+   "LLY",
+   "MDT",
+   "CVS",
+   "CI",
+   "MO",
+   "PM",
+   "CL",
+   "KMB",
+   "GIS",
+   "MDLZ",
+   "NEE",
+   "DUK",
+   "SO",
+   "D",
+   "EXC",
+   "COP",
+   "SLB",
+   "EOG",
+   "OXY",
+   "F",
+   "GM",
+   "MU",
+   "AMAT",
+   "LRCX",
+   "KLAC",
+   "ADI",
+   "MCHP",
+   "SMCI"
+  ],
+  "survivorship_bias": "Universe = current large caps; delisted names absent. Momentum is judged against the same universe equally weighted.",
+  "parameters_fixed_before_results": true,
+  "price_corrections": [
+   {
+    "symbol": "DHR",
+    "date": "2016-07-05",
+    "removed_return": 0.6121848807147101,
+    "reason": "Fortive spin-off adjusted upward by the provider; true holder return ~0"
+   }
+  ],
+  "strategies": {
+   "hygiene": {
+    "dates": 5752,
+    "symbols": 98,
+    "invalid_prices_removed": 0,
+    "extreme_daily_moves_over_50pct": {
+     "AMD": 1,
+     "C": 1,
+     "MS": 1,
+     "OXY": 1
+    },
+    "first_date": "2004-01-02",
+    "last_date": "2026-11-11"
+   },
+   "config": {
+    "cost_bps_per_side": 30.0,
+    "execution_lag_days": 1,
+    "momentum_lookback": 252,
+    "momentum_skip": 21,
+    "momentum_quantile": 0.2,
+    "momentum_min_names": 5,
+    "trend_window": 200,
+    "vol_target_annual": 0.15,
+    "vol_ewma_lambda": 0.94,
+    "vol_rebalance_days": 5,
+    "holdout_start": "2019-01-01",
+    "bootstrap_draws": 1000,
+    "bootstrap_block": 21,
+    "seed": 20261111
+   },
+   "periods": {
+    "FULL": {
+     "start": "2005-01-06",
+     "end": "2026-11-11",
+     "strategies": {
+      "BUY_HOLD_BENCHMARK": {
+       "days": 5497,
+       "start": "2005-01-06",
+       "end": "2026-11-11",
+       "cagr": 0.10906961122438052,
+       "volatility": 0.18882065383404043,
+       "sharpe": 0.5489288147479942,
+       "max_drawdown": -0.5518943799375443,
+       "calmar": 0.19762768962554664,
+       "final_wealth_per_1": 9.565519269672805,
+       "turnover_per_year": 0.0,
+       "cost_drag_per_year": 0.0,
+       "average_exposure": 1.0,
+       "position_gap_days": 0
+      },
+      "TREND_200": {
+       "days": 5497,
+       "start": "2005-01-06",
+       "end": "2026-11-11",
+       "cagr": 0.0852820075053764,
+       "volatility": 0.12452084491625993,
+       "sharpe": 0.5773584058826566,
+       "max_drawdown": -0.273526142510395,
+       "calmar": 0.31178740987119863,
+       "final_wealth_per_1": 5.9608513240540395,
+       "turnover_per_year": 1.375295615790431,
+       "cost_drag_per_year": 0.004123321070779701,
+       "average_exposure": 0.8093505548480989,
+       "position_gap_days": 0
+      },
+      "VOL_TARGET": {
+       "days": 5497,
+       "start": "2005-01-06",
+       "end": "2026-11-11",
+       "cagr": 0.09593683412864906,
+       "volatility": 0.13283567737594446,
+       "sharpe": 0.622831393008854,
+       "max_drawdown": -0.33479069712084353,
+       "calmar": 0.28655764617623297,
+       "final_wealth_per_1": 7.376684435026008,
+       "turnover_per_year": 1.1558783801148895,
+       "cost_drag_per_year": 0.0034759180723892827,
+       "average_exposure": 0.8898358874300474,
+       "position_gap_days": 0
+      },
+      "EQUAL_WEIGHT_UNIVERSE": {
+       "days": 5497,
+       "start": "2005-01-06",
+       "end": "2026-11-11",
+       "cagr": 0.15877053317887913,
+       "volatility": 0.18779927009516972,
+       "sharpe": 0.7844996347107874,
+       "max_drawdown": -0.4771959934817869,
+       "calmar": 0.33271556204911623,
+       "final_wealth_per_1": 24.889015104965143,
+       "turnover_per_year": 0.6198501981686354,
+       "cost_drag_per_year": 0.0018608827662721724,
+       "average_exposure": 1.0,
+       "position_gap_days": 0
+      },
+      "MOMENTUM_12_1": {
+       "days": 5497,
+       "start": "2005-01-06",
+       "end": "2026-11-11",
+       "cagr": 0.1752714601310581,
+       "volatility": 0.2266522450282394,
+       "sharpe": 0.7482052526330534,
+       "max_drawdown": -0.5225455962338025,
+       "calmar": 0.3354185001161821,
+       "final_wealth_per_1": 33.88120529246602,
+       "turnover_per_year": 6.187376484265598,
+       "cost_drag_per_year": 0.018582875545125683,
+       "average_exposure": 0.9969074040385665,
+       "position_gap_days": 0
+      },
+      "MOMENTUM_12_1_TREND": {
+       "days": 5497,
+       "start": "2005-01-06",
+       "end": "2026-11-11",
+       "cagr": 0.15506767356585915,
+       "volatility": 0.17834328618716663,
+       "sharpe": 0.7984929077422271,
+       "max_drawdown": -0.2653396028681386,
+       "calmar": 0.5844120963839707,
+       "final_wealth_per_1": 23.210616102555832,
+       "turnover_per_year": 6.101358050410253,
+       "cost_drag_per_year": 0.0183308863082785,
+       "average_exposure": 0.8062579588866654,
+       "position_gap_days": 0
+      }
+     },
+     "comparisons": {
+      "TREND_200_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": -0.03175140611153315,
+       "annual_return_difference_95": [
+        -0.07913213844897797,
+        0.018532407593195972
+       ],
+       "sharpe_difference": 0.02842959113466248,
+       "sharpe_difference_95": [
+        -0.29115970553148857,
+        0.35328083189603904
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "VOL_TARGET_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": -0.020915914060379504,
+       "annual_return_difference_95": [
+        -0.046570954524500156,
+        0.006518106011997334
+       ],
+       "sharpe_difference": 0.07390257826085989,
+       "sharpe_difference_95": [
+        -0.09056836220237245,
+        0.23156215238650693
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "MOMENTUM_12_1_vs_EQUAL_WEIGHT_UNIVERSE": {
+       "annual_return_difference": 0.022248583499604225,
+       "annual_return_difference_95": [
+        -0.02517750561918485,
+        0.06906316600848374
+       ],
+       "sharpe_difference": -0.036294382077734055,
+       "sharpe_difference_95": [
+        -0.2666019661661351,
+        0.16949156016167896
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "MOMENTUM_12_1_TREND_vs_EQUAL_WEIGHT_UNIVERSE": {
+       "annual_return_difference": -0.004920788981851269,
+       "annual_return_difference_95": [
+        -0.06823191954849028,
+        0.06240355876139603
+       ],
+       "sharpe_difference": 0.013993273031439712,
+       "sharpe_difference_95": [
+        -0.37619538166320926,
+        0.3992414258555317
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "EQUAL_WEIGHT_UNIVERSE_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": 0.04368304645234702,
+       "annual_return_difference_95": [
+        0.026547601735730265,
+        0.059455232231769926
+       ],
+       "sharpe_difference": 0.23557081996279328,
+       "sharpe_difference_95": [
+        0.14600560565857731,
+        0.3256215421208231
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      }
+     }
+    },
+    "DEVELOPMENT": {
+     "start": "2005-01-06",
+     "end": "2019-01-01",
+     "strategies": {
+      "BUY_HOLD_BENCHMARK": {
+       "days": 3520,
+       "start": "2005-01-06",
+       "end": "2018-12-31",
+       "cagr": 0.07670700400657493,
+       "volatility": 0.18685385964341866,
+       "sharpe": 0.4234119512269389,
+       "max_drawdown": -0.5518943799375443,
+       "calmar": 0.1389885579470035,
+       "final_wealth_per_1": 2.8076732530144533,
+       "turnover_per_year": 0.0,
+       "cost_drag_per_year": 0.0,
+       "average_exposure": 1.0,
+       "position_gap_days": 0
+      },
+      "TREND_200": {
+       "days": 3520,
+       "start": "2005-01-06",
+       "end": "2018-12-31",
+       "cagr": 0.08319463146749206,
+       "volatility": 0.12240637353637814,
+       "sharpe": 0.6142767490618637,
+       "max_drawdown": -0.21342567164930826,
+       "calmar": 0.38980611294124845,
+       "final_wealth_per_1": 3.0534385964292428,
+       "turnover_per_year": 0.859090909090909,
+       "cost_drag_per_year": 0.0025624262911675823,
+       "average_exposure": 0.8153409090909091,
+       "position_gap_days": 0
+      },
+      "VOL_TARGET": {
+       "days": 3520,
+       "start": "2005-01-06",
+       "end": "2018-12-31",
+       "cagr": 0.07712715256177427,
+       "volatility": 0.12922044864700558,
+       "sharpe": 0.5450164746291724,
+       "max_drawdown": -0.33479069712084353,
+       "calmar": 0.2303742404584648,
+       "final_wealth_per_1": 2.8230156494712735,
+       "turnover_per_year": 1.0641329604292016,
+       "cost_drag_per_year": 0.0031971377153894504,
+       "average_exposure": 0.8949288058188646,
+       "position_gap_days": 0
+      },
+      "EQUAL_WEIGHT_UNIVERSE": {
+       "days": 3520,
+       "start": "2005-01-06",
+       "end": "2018-12-31",
+       "cagr": 0.13464555038016757,
+       "volatility": 0.18732692014450023,
+       "sharpe": 0.7027811393210996,
+       "max_drawdown": -0.4771959934817869,
+       "calmar": 0.2821598509194243,
+       "final_wealth_per_1": 5.838501642323832,
+       "turnover_per_year": 0.5723930968020017,
+       "cost_drag_per_year": 0.0017181913183759103,
+       "average_exposure": 1.0,
+       "position_gap_days": 0
+      },
+      "MOMENTUM_12_1": {
+       "days": 3520,
+       "start": "2005-01-06",
+       "end": "2018-12-31",
+       "cagr": 0.14076468855162583,
+       "volatility": 0.20945820493539266,
+       "sharpe": 0.6753547150647488,
+       "max_drawdown": -0.5225455962338025,
+       "calmar": 0.2693825946791512,
+       "final_wealth_per_1": 6.294036027293218,
+       "turnover_per_year": 6.294381107712833,
+       "cost_drag_per_year": 0.018902764787338346,
+       "average_exposure": 0.9951704545454545,
+       "position_gap_days": 0
+      },
+      "MOMENTUM_12_1_TREND": {
+       "days": 3520,
+       "start": "2005-01-06",
+       "end": "2018-12-31",
+       "cagr": 0.17324682354715293,
+       "volatility": 0.16365231988959683,
+       "sharpe": 0.9837445447641466,
+       "max_drawdown": -0.2653396028681386,
+       "calmar": 0.6529248618542951,
+       "final_wealth_per_1": 9.316409753284255,
+       "turnover_per_year": 5.793010988591554,
+       "cost_drag_per_year": 0.017393019518336016,
+       "average_exposure": 0.8105113636363637,
+       "position_gap_days": 0
+      }
+     },
+     "comparisons": {
+      "TREND_200_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": -0.003924950292604339,
+       "annual_return_difference_95": [
+        -0.05999084500013118,
+        0.05712191996532323
+       ],
+       "sharpe_difference": 0.19086479783492477,
+       "sharpe_difference_95": [
+        -0.19686816491707315,
+        0.5981383146729718
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "VOL_TARGET_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": -0.008686592981789915,
+       "annual_return_difference_95": [
+        -0.03859695239158814,
+        0.025573573651419903
+       ],
+       "sharpe_difference": 0.12160452340223343,
+       "sharpe_difference_95": [
+        -0.08957248465347543,
+        0.32082633537363414
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "MOMENTUM_12_1_vs_EQUAL_WEIGHT_UNIVERSE": {
+       "annual_return_difference": 0.009808773611182675,
+       "annual_return_difference_95": [
+        -0.03936905428341766,
+        0.05702540159749921
+       ],
+       "sharpe_difference": -0.02742642425635089,
+       "sharpe_difference_95": [
+        -0.25407493111267515,
+        0.18593409957973428
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "MOMENTUM_12_1_TREND_vs_EQUAL_WEIGHT_UNIVERSE": {
+       "annual_return_difference": 0.02934392609845326,
+       "annual_return_difference_95": [
+        -0.03823981467884184,
+        0.10323655150395215
+       ],
+       "sharpe_difference": 0.280963405443047,
+       "sharpe_difference_95": [
+        -0.15630014765147296,
+        0.7730708016539696
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "EQUAL_WEIGHT_UNIVERSE_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": 0.05253650509264741,
+       "annual_return_difference_95": [
+        0.03781621596223263,
+        0.06809285617680845
+       ],
+       "sharpe_difference": 0.2793691880941607,
+       "sharpe_difference_95": [
+        0.2080027876740944,
+        0.3659613297899067
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      }
+     }
+    },
+    "HOLDOUT": {
+     "start": "2019-01-01",
+     "end": "2026-11-11",
+     "strategies": {
+      "BUY_HOLD_BENCHMARK": {
+       "days": 1977,
+       "start": "2019-01-02",
+       "end": "2026-11-11",
+       "cagr": 0.16911700378715833,
+       "volatility": 0.19227431279463844,
+       "sharpe": 0.7662164725616615,
+       "max_drawdown": -0.3371727693638179,
+       "calmar": 0.5015737306018234,
+       "final_wealth_per_1": 3.406920395527778,
+       "turnover_per_year": 0.0,
+       "cost_drag_per_year": 0.0,
+       "average_exposure": 1.0,
+       "position_gap_days": 0
+      },
+      "TREND_200": {
+       "days": 1977,
+       "start": "2019-01-02",
+       "end": "2026-11-11",
+       "cagr": 0.08900849112820497,
+       "volatility": 0.1282303487267346,
+       "sharpe": 0.5148643309725247,
+       "max_drawdown": -0.2735261425103933,
+       "calmar": 0.3254112762725152,
+       "final_wealth_per_1": 1.9521765825010475,
+       "turnover_per_year": 2.2943854324734447,
+       "cost_drag_per_year": 0.006902455933822016,
+       "average_exposure": 0.7986848760748609,
+       "position_gap_days": 0
+      },
+      "VOL_TARGET": {
+       "days": 1977,
+       "start": "2019-01-02",
+       "end": "2026-11-11",
+       "cagr": 0.13024375796602206,
+       "volatility": 0.13905111047509042,
+       "sharpe": 0.7525398999302033,
+       "max_drawdown": -0.19848010369642433,
+       "calmar": 0.6562056122523501,
+       "final_wealth_per_1": 2.613051201614,
+       "turnover_per_year": 1.31922884915567,
+       "cost_drag_per_year": 0.003972279658954486,
+       "average_exposure": 0.8807680711788399,
+       "position_gap_days": 0
+      },
+      "EQUAL_WEIGHT_UNIVERSE": {
+       "days": 1977,
+       "start": "2019-01-02",
+       "end": "2026-11-11",
+       "cagr": 0.20300118184369143,
+       "volatility": 0.18866150643493712,
+       "sharpe": 0.928839531815958,
+       "max_drawdown": -0.3438641062944665,
+       "calmar": 0.5903529275889361,
+       "final_wealth_per_1": 4.262911382013208,
+       "turnover_per_year": 0.704346402928651,
+       "cost_drag_per_year": 0.002114941388727834,
+       "average_exposure": 1.0,
+       "position_gap_days": 0
+      },
+      "MOMENTUM_12_1": {
+       "days": 1977,
+       "start": "2019-01-02",
+       "end": "2026-11-11",
+       "cagr": 0.2393138927178735,
+       "volatility": 0.25441874991125396,
+       "sharpe": 0.8633234625129509,
+       "max_drawdown": -0.33319470953047403,
+       "calmar": 0.718240373789566,
+       "final_wealth_per_1": 5.383065038958277,
+       "turnover_per_year": 5.996857377267994,
+       "cost_drag_per_year": 0.018013320596927108,
+       "average_exposure": 1.0,
+       "position_gap_days": 0
+      },
+      "MOMENTUM_12_1_TREND": {
+       "days": 1977,
+       "start": "2019-01-02",
+       "end": "2026-11-11",
+       "cagr": 0.1233945708106452,
+       "volatility": 0.20190735999411585,
+       "sharpe": 0.5414153764769835,
+       "max_drawdown": -0.2602675714507542,
+       "calmar": 0.47410659008662925,
+       "final_wealth_per_1": 2.491369177313569,
+       "turnover_per_year": 6.650362429571515,
+       "cost_drag_per_year": 0.020000735119911052,
+       "average_exposure": 0.7986848760748609,
+       "position_gap_days": 0
+      }
+     },
+     "comparisons": {
+      "TREND_200_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": -0.08129572805520004,
+       "annual_return_difference_95": [
+        -0.15941286143458194,
+        0.00412946149761021
+       ],
+       "sharpe_difference": -0.25135214158913677,
+       "sharpe_difference_95": [
+        -0.7848744231344837,
+        0.2569080164408073
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "VOL_TARGET_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": -0.04268992022964374,
+       "annual_return_difference_95": [
+        -0.08487959224464725,
+        0.0005789056845719224
+       ],
+       "sharpe_difference": -0.013676572631458161,
+       "sharpe_difference_95": [
+        -0.23889196573955943,
+        0.21452664694909246
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "MOMENTUM_12_1_vs_EQUAL_WEIGHT_UNIVERSE": {
+       "annual_return_difference": 0.04439735983103776,
+       "annual_return_difference_95": [
+        -0.05002799780561119,
+        0.1426673148617415
+       ],
+       "sharpe_difference": -0.06551606930300713,
+       "sharpe_difference_95": [
+        -0.5798512635773546,
+        0.3375442593787441
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "MOMENTUM_12_1_TREND_vs_EQUAL_WEIGHT_UNIVERSE": {
+       "annual_return_difference": -0.06592827359625286,
+       "annual_return_difference_95": [
+        -0.18063529497665456,
+        0.054235658930160684
+       ],
+       "sharpe_difference": -0.38742415533897456,
+       "sharpe_difference_95": [
+        -1.09514893846941,
+        0.2616829622217432
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      },
+      "EQUAL_WEIGHT_UNIVERSE_vs_BUY_HOLD_BENCHMARK": {
+       "annual_return_difference": 0.027919680537396366,
+       "annual_return_difference_95": [
+        -0.010305931909751553,
+        0.06516494254052684
+       ],
+       "sharpe_difference": 0.16262305925429654,
+       "sharpe_difference_95": [
+        -0.032518350361797156,
+        0.41930209093772236
+       ],
+       "method": "stationary block bootstrap, mean block 21 days, 1000 draws"
+      }
+     }
+    }
+   }
+  },
+  "volatility": {
+   "SPY": {
+    "horizon_days": 5,
+    "evaluated_days": 4747,
+    "qlike_all": {
+     "NAIVE_20D": 0.5876772575314575,
+     "EWMA_094": 0.5146589323494078,
+     "GARCH_1_1_WF": 0.46155299120846566
+    },
+    "qlike_holdout": {
+     "NAIVE_20D": 0.5625746188929976,
+     "EWMA_094": 0.5060504184267431,
+     "GARCH_1_1_WF": 0.4311244955721433
+    },
+    "years_beating_naive": {
+     "EWMA_094": 18,
+     "GARCH_1_1_WF": 17
+    },
+    "years_evaluated": 19,
+    "current": {
+     "as_of": "2026-11-11",
+     "garch": {
+      "alpha": 0.14,
+      "beta": 0.84,
+      "long_run_variance": 0.00013762650445122776,
+      "loglik": 24191.2955350397,
+      "observations": 5751
+     },
+     "forecast_daily_vol": 0.016273612396624747,
+     "ewma_daily_vol": 0.01340043605168692,
+     "realized_20d_daily_vol": 0.013752695907272199
+    }
+   },
+   "SMCI": {
+    "horizon_days": 5,
+    "evaluated_days": 3933,
+    "qlike_all": {
+     "NAIVE_20D": 1.1492980175104912,
+     "EWMA_094": 0.9571543522625078,
+     "GARCH_1_1_WF": 0.850274267546016
+    },
+    "qlike_holdout": {
+     "NAIVE_20D": 1.1120495354065798,
+     "EWMA_094": 0.9269692732011029,
+     "GARCH_1_1_WF": 0.8560759240396876
+    },
+    "years_beating_naive": {
+     "EWMA_094": 16,
+     "GARCH_1_1_WF": 13
+    },
+    "years_evaluated": 16,
+    "current": {
+     "as_of": "2026-11-11",
+     "garch": {
+      "alpha": 0.03071428571428571,
+      "beta": 0.96,
+      "long_run_variance": 0.0016054708694961863,
+      "loglik": 13892.604649247925,
+      "observations": 4937
+     },
+     "forecast_daily_vol": 0.04990822392081921,
+     "ewma_daily_vol": 0.053906377417739265,
+     "realized_20d_daily_vol": 0.05611950247100342
+    }
+   },
+   "NVDA": {
+    "horizon_days": 5,
+    "evaluated_days": 4747,
+    "qlike_all": {
+     "NAIVE_20D": 0.6586310616267581,
+     "EWMA_094": 0.5860849378822579,
+     "GARCH_1_1_WF": 0.5518122432162733
+    },
+    "qlike_holdout": {
+     "NAIVE_20D": 0.49762337899948456,
+     "EWMA_094": 0.4596012748591884,
+     "GARCH_1_1_WF": 0.42644940078866495
+    },
+    "years_beating_naive": {
+     "EWMA_094": 17,
+     "GARCH_1_1_WF": 17
+    },
+    "years_evaluated": 19,
+    "current": {
+     "as_of": "2026-11-11",
+     "garch": {
+      "alpha": 0.06714285714285713,
+      "beta": 0.9049999999999999,
+      "long_run_variance": 0.0009487844824048609,
+      "loglik": 17517.33168076596,
+      "observations": 5751
+     },
+     "forecast_daily_vol": 0.03574194030132488,
+     "ewma_daily_vol": 0.033256073108314736,
+     "realized_20d_daily_vol": 0.0336642185213396
+    }
+   }
+  },
+  "sizing_examples": {
+   "SPY": {
+    "forecast_daily_vol": 0.016273612396624747,
+    "forecast_annual_vol": 0.2583355880047614,
+    "max_position_per_1000_at_1pct_99_risk": 263.73035002679484
+   },
+   "SMCI": {
+    "forecast_daily_vol": 0.04990822392081921,
+    "forecast_annual_vol": 0.7922684932284755,
+    "max_position_per_1000_at_1pct_99_risk": 85.99475510030902
+   },
+   "NVDA": {
+    "forecast_daily_vol": 0.03574194030132488,
+    "forecast_annual_vol": 0.5673857124733358,
+    "max_position_per_1000_at_1pct_99_risk": 120.07869347269717
+   }
+  },
+  "portfolio_db_accessed": false,
+  "production_model_changed": false
+ },
+ "sha256": "4201325e736aa4ffaec0594a0e946f2baa1d238c8ae39c5affa21c26f4882f4e"
+}

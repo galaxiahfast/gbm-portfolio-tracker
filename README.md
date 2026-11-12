@@ -155,6 +155,13 @@ con límites de riesgo, efectivo y concentración. Un score alcista alto por sí
 solo ya no autoriza COMPRAR; sin modelos operativos suficientes la decisión es
 ESPERAR, no una probabilidad inventada.
 
+El [estudio diario de factores](docs/daily_factor_study.md) prueba con 20 años
+de velas diarias y costos de GBM tres efectos documentados (momentum 12-1,
+tendencia SMA 200 y objetivo de volatilidad) y compara pronósticos de
+volatilidad ingenuo, EWMA y GARCH walk-forward. Ninguna regla supera a su
+referencia con significancia; el pronóstico GARCH de volatilidad sí mejora de
+forma estable y sirve para dimensionar posiciones.
+
 Las pestañas son dinámicas: la vista técnica solo construye sus gráficas cuando se abre. El PDF se genera en memoria con ReportLab, no escribe datos del usuario en el repositorio e incluye la trayectoria vectorial de 15 sesiones, Bandas de Bollinger/VWAP, Estocástico RSI, MACD intradía y estructura EMA diaria construidos desde los mismos DataFrames reales de la vista avanzada, además del bloque estructurado para revisión por otra IA.
 
 Justo encima de las tres pestañas, la barra del predictor ofrece cuatro descargas consistentes con el mismo corte de mercado: Vista Ejecutiva, Vista Técnica Avanzada, PDF combinado de ambas y PDF Maestro. El maestro añade la última calibración/backtesting registrada, sus parámetros, métricas OOS, realimentación progresiva y verificación SHA-256. El PDF técnico incorpora quince paneles disponibles: Bollinger/VWAP, Estocástico RSI, MACD 5m y 1h, ADX/+DI/-DI, OBV, estructuras EMA diaria/semanal/mensual, MACD diario/semanal/mensual, Ichimoku diario y dos paneles de patrones chartistas (5m y diario). Si una temporalidad todavía no reúne observaciones suficientes, el reporte lo indica sin cancelar las demás páginas.
