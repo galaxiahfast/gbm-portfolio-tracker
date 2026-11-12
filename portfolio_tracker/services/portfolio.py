@@ -9,6 +9,7 @@ from typing import Any
 
 from ..models import (
     CashMovementKind,
+    chronological_key,
     PortfolioSummary,
     Position,
     PriceQuote,
@@ -51,7 +52,7 @@ class PortfolioCalculator:
         warnings: list[str] = []
         commissions = Decimal("0")
 
-        for trade in sorted(trades, key=lambda item: (item["executed_at"], item["id"])):
+        for trade in sorted(trades, key=chronological_key):
             symbol = str(trade["symbol"]).upper()
             quantity = Decimal(trade["quantity"])
             gross = Decimal(trade["gross_usd"])
@@ -161,3 +162,22 @@ class PortfolioCalculator:
             result[str(trade["symbol"]).upper()] += sign * Decimal(trade["quantity"])
         return dict(result)
 
+
+
+def first_negative_holding(trades: list[dict[str, Any]]) -> str | None:
+    """Return a readable error if, at any instant, sales exceed shares held.
+
+    The check walks the whole chronological sequence, so a back-dated sale or
+    the deletion of an already-sold purchase is caught, not only today's total.
+    """
+    held: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    for trade in sorted(trades, key=chronological_key):
+        symbol = str(trade["symbol"]).upper()
+        quantity = Decimal(str(trade["quantity"]))
+        held[symbol] += quantity if trade["side"] == TradeSide.BUY.value else -quantity
+        if held[symbol] < 0:
+            return (
+                f"{symbol}: en {trade['executed_at']} se venderían {-held[symbol]} "
+                "títulos más de los que había en ese momento."
+            )
+    return None

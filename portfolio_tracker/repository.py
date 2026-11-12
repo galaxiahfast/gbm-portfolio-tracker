@@ -294,7 +294,37 @@ class PortfolioRepository:
             return True
 
     def delete_trade(self, trade_id: int) -> bool:
+        """Delete one trade only if the remaining ledger stays coherent.
+
+        Raises ValueError (shown to the user) instead of letting SQLite's
+        RESTRICT constraint or a negative share history surface as a crash.
+        """
+        from .services.portfolio import first_negative_holding
+
         with self.database.transaction() as connection:
+            allocation = connection.execute(
+                """SELECT sale_trade_id, buy_trade_id FROM sale_lot_allocations
+                   WHERE sale_trade_id = ? OR buy_trade_id = ? LIMIT 1""",
+                (trade_id, trade_id),
+            ).fetchone()
+            if allocation is not None:
+                raise ValueError(
+                    f"La operación #{trade_id} participa en la asignación de lote "
+                    f"venta #{allocation['sale_trade_id']} → compra #{allocation['buy_trade_id']}, "
+                    "que es inmutable para auditoría; no se eliminó."
+                )
+            remaining = [
+                dict(row) for row in connection.execute(
+                    "SELECT id, symbol, side, quantity, executed_at FROM trades WHERE id <> ?",
+                    (trade_id,),
+                ).fetchall()
+            ]
+            problem = first_negative_holding(remaining)
+            if problem:
+                raise ValueError(
+                    f"No se eliminó la operación #{trade_id}: el historial quedaría con "
+                    f"títulos negativos. {problem}"
+                )
             cursor = connection.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
             return cursor.rowcount == 1
 
@@ -1436,7 +1466,11 @@ class PortfolioRepository:
         with self.database.connect() as connection:
             rows = connection.execute(
                 """SELECT CASE WHEN json_valid(parameters_json)
-                          THEN json_extract(parameters_json, '$.replay.run_id') END AS run_id
+                          THEN json_extract(parameters_json, '$.replay.run_id') END AS run_id,
+                          SUM(CASE WHEN json_valid(parameters_json)
+                              AND COALESCE(json_extract(parameters_json,
+                                  '$.replay.features.position_state'), 'FLAT') <> 'FLAT'
+                              THEN 1 ELSE 0 END) AS held_rows
                    FROM live_model_observations
                    WHERE symbol=? AND integrity_version IN (?, ?)
                      AND CASE WHEN json_valid(parameters_json)
@@ -1445,6 +1479,10 @@ class PortfolioRepository:
                 (symbol.strip().upper(), VERSION, PREVIOUS_VERSION),
             ).fetchall()
         for row in rows:
+            if row["held_rows"]:
+                # Cut recorded while shares were held: its barriers were the
+                # frozen position plan, not a fresh entry. Not entry evidence.
+                continue
             record = self.live_model_execution_record(row["run_id"])
             if record is None:
                 continue  # Partial or hash-invalid cohorts are never evidence.

@@ -1,6 +1,6 @@
 # Interfaz y tablas/gráficas ligeras
 streamlit>=1.62,<2
-numpy>=1.26,<3
+numpy>=1.26,<2.6  # pandas 2.x usa la unidad "generic" deprecada en NumPy 2.5
 pandas>=2.2,<3
 exchange-calendars>=4.5,<5
 plotly>=6.5,<7

@@ -1,5 +1,6 @@
 import sqlite3
 import pandas as pd
+import pytest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -179,3 +180,40 @@ def test_live_model_feedback_is_unique_resolved_and_hash_audited(tmp_path) -> No
     assert valid == 1
     assert invalid == ()
     assert repository.live_model_calibration_samples("SMCI", horizon_minutes=60) == ((0.62, 1),)
+
+
+def _ledger_with_buy_and_sell(tmp_path):
+    repository = PortfolioRepository(Database(tmp_path / "portfolio.db"))
+    repository.database.initialize()
+    repository.ensure_initial_capital()
+    start = datetime(2026, 10, 1, 15, tzinfo=timezone.utc)
+    buy = repository.add_trade(TradeDraft(
+        symbol="ABC", side=TradeSide.BUY, quantity=Decimal("2"),
+        price_usd=Decimal("10"), commission_usd=Decimal("0"), executed_at=start,
+    ))
+    sell = repository.add_trade(TradeDraft(
+        symbol="ABC", side=TradeSide.SELL, quantity=Decimal("2"),
+        price_usd=Decimal("11"), commission_usd=Decimal("0"),
+        executed_at=start + timedelta(days=1),
+    ))
+    return repository, buy, sell
+
+
+def test_deleting_a_sold_purchase_is_refused_without_crash(tmp_path) -> None:
+    repository, buy, _ = _ledger_with_buy_and_sell(tmp_path)
+    with pytest.raises(ValueError, match="negativos"):
+        repository.delete_trade(buy)
+    assert len(repository.list_trades()) == 2
+
+
+def test_deleting_the_sale_is_allowed(tmp_path) -> None:
+    repository, _, sell = _ledger_with_buy_and_sell(tmp_path)
+    assert repository.delete_trade(sell) is True
+    assert len(repository.list_trades()) == 1
+
+
+def test_deleting_an_allocated_trade_is_a_readable_error(tmp_path) -> None:
+    repository, buy, sell = _ledger_with_buy_and_sell(tmp_path)
+    repository.assign_sale_to_buy_lot(sale_trade_id=sell, buy_trade_id=buy, reason="lote")
+    with pytest.raises(ValueError, match="asignación de lote"):
+        repository.delete_trade(sell)

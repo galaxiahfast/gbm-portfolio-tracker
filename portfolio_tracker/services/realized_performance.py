@@ -12,7 +12,7 @@ from datetime import datetime, tzinfo
 from decimal import Decimal
 from typing import Any
 
-from ..models import TradeSide, money
+from ..models import TradeSide, chronological_key, money
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +43,7 @@ def realized_sales(
     """
     lots: dict[str, deque[list[Decimal]]] = defaultdict(deque)
     sales: list[RealizedSale] = []
-    for trade in sorted(trades, key=lambda row: (row["executed_at"], row["id"])):
+    for trade in sorted(trades, key=chronological_key):
         symbol = str(trade["symbol"]).upper()
         quantity = Decimal(trade["quantity"])
         gross = Decimal(trade["gross_usd"])

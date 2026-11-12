@@ -69,7 +69,7 @@ from portfolio_tracker.services.market_data import (
 )
 from portfolio_tracker.services.implementation_status import inspect_implementation_status
 from portfolio_tracker.services.ocr import GbmOcrExtractor, OcrUnavailableError
-from portfolio_tracker.services.portfolio import PortfolioCalculator
+from portfolio_tracker.services.portfolio import PortfolioCalculator, first_negative_holding
 from portfolio_tracker.services.lot_sale_simulator import open_buy_lots, simulate_lot_sale
 from portfolio_tracker.services.realized_performance import (
     RealizedSale,
@@ -345,6 +345,16 @@ def save_trade(
                 f"registrados de {trade.symbol.upper()}."
             )
             return False
+    # Also check the sequence at the trade's own date: a back-dated sale must
+    # not precede the purchases that cover it.
+    sequence_problem = first_negative_holding([
+        *existing,
+        {"id": 2**62, "symbol": trade.symbol, "side": trade.side.value,
+         "quantity": trade.quantity, "executed_at": trade.executed_at},
+    ])
+    if sequence_problem:
+        st.error(f"Fecha incompatible con el historial. {sequence_problem}")
+        return False
     if trade.side is TradeSide.BUY and repository.cash_balance_usd() + trade.cash_delta_usd < 0:
         st.error("La compra excede el efectivo USD disponible.")
         return False
@@ -975,9 +985,14 @@ def render_trade_management(repository: PortfolioRepository) -> None:
         if st.button(
             "Eliminar operación", disabled=not confirm_delete, icon=":material/delete:"
         ):
-            if repository.delete_trade(int(selected_id)):
-                st.toast("Operación eliminada; comprobante conservado")
-                st.rerun()
+            try:
+                deleted = repository.delete_trade(int(selected_id))
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                if deleted:
+                    st.toast("Operación eliminada; comprobante conservado")
+                    st.rerun()
 
 
 def operations_page(repository: PortfolioRepository, fx_quote: FxQuote | None) -> None:

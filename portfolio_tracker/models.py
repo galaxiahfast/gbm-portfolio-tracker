@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from enum import StrEnum
 
@@ -22,6 +22,19 @@ def shares(value: Decimal | str | int | float) -> Decimal:
     """Conserva hasta seis decimales para soportar titulos fraccionarios."""
 
     return Decimal(str(value)).quantize(SHARE_PRECISION, rounding=ROUND_HALF_UP)
+
+
+def chronological_key(row) -> tuple[datetime, int]:
+    """Orden real de ejecución: compara instantes, no cadenas ISO.
+
+    Una cadena con otro desfase horario (p. ej. -06:00 frente a +00:00) se
+    ordenaría mal lexicográficamente y alteraría los lotes FIFO.
+    """
+    value = row["executed_at"]
+    moment = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment, int(row["id"])
 
 
 class TradeSide(StrEnum):

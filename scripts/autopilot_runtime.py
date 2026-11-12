@@ -198,6 +198,21 @@ def analyze_headless(repository, symbol, intraday, daily, fundamental, fundament
     Operational memory is shared with UI; synchronize_position only writes
     operational_events and NEVER creates fills/orders/cash movements.
     """
+    return analyze_headless_with_evidence(
+        repository, symbol, intraday, daily, fundamental, fundamental_hash, now, log,
+    )[0]
+
+
+def analyze_headless_with_evidence(repository, symbol, intraday, daily, fundamental,
+                                   fundamental_hash, now, log):
+    """Return ``(position_analysis, evidence_analysis)``.
+
+    ``position_analysis`` is synchronized with the ledger (frozen levels while
+    shares are held), exactly as the UI shows it. ``evidence_analysis`` is the
+    same market cut *before* that synchronization: research evidence about a
+    new entry must not depend on whether the user happens to hold shares, nor
+    reuse a stale position plan whose stop was already crossed.
+    """
     from portfolio_tracker.analytics.backtesting import ENGINE_VERSION
     from portfolio_tracker.analytics.technical_probability import analyze_probability
     from portfolio_tracker.analytics.fundamental_news import apply_fundamental_filter
@@ -221,7 +236,7 @@ def analyze_headless(repository, symbol, intraday, daily, fundamental, fundament
             log.warning("%s: corte fundamental descartado como en UI: %s", symbol, exc)
     from portfolio_tracker.services.cross_asset import enrich_cross_asset
     analysis = enrich_cross_asset(analysis, intraday, daily, now=now)
-    return synchronize_position(repository.database, analysis)
+    return synchronize_position(repository.database, analysis), analysis
 
 
 def completed_group(repository, symbol, day, earliest=None):
@@ -268,18 +283,19 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
             fundamental, fundamental_hash = fundamental_context(repository, symbol, log)
             intraday, daily = cache.frames(symbol, now_fn())
             input_artifacts = cache.artifact_refs(symbol)
-            analysis = analyze_headless(repository, symbol, intraday, daily,
-                                        fundamental, fundamental_hash, now_fn(), log)
+            analysis, evidence_analysis = analyze_headless_with_evidence(
+                repository, symbol, intraday, daily, fundamental, fundamental_hash, now_fn(), log,
+            )
             if not allowed("collect", now_fn(), scheduled):
                 raise ValueError("Terminó la ventana antes de emitir; no se guardan pronósticos tardíos.")
             emitted_at = now_fn()
             from portfolio_tracker.analytics.temporal_contract import is_actionable_emission
-            if is_actionable_emission(emitted_at, analysis.source_bar_closed_at):
+            if is_actionable_emission(emitted_at, evidence_analysis.source_bar_closed_at):
                 parameters = repository.latest_backtest_parameters(symbol=symbol, engine_version=ENGINE_VERSION) or {
                     "minimum_probability": .55, "stop_atr_multiple": 2.25, "risk_per_trade_pct": 1.,
                 }
                 saved = record_fixed_directional(
-                    repository, analysis, parameters, emitted_at,
+                    repository, evidence_analysis, parameters, emitted_at,
                     input_artifacts=input_artifacts,
                 )
                 log.info("%s: corte direccional 11 NY: %s/6 observaciones nuevas; sin duplicados", symbol, saved)
@@ -301,8 +317,16 @@ def collect(repository, symbols, state_dir, log, *, scheduled=False, now_fn=cloc
                 result = log_snapshot(repository, analysis, snapshot, now=now_fn())
                 log.info("%s: predicción guardada. %s zonas. %s", symbol, result["saved"], result["reason"])
                 if not completed_group(repository, symbol, day, earliest):
-                    failed = True
-                    log.warning("%s: recolección incompleta; no se inventan zonas o porcentajes N/D", symbol)
+                    if result.get("skipped"):
+                        # Deterministic for this cut: the same bars yield the same
+                        # missing level, so a 30 s retry only re-downloads and
+                        # raises a false ALERTA. Never fabricated either way.
+                        log.warning("%s: %s zona(s) sin nivel/estimación utilizable en este corte; "
+                                    "resultado determinista, sin reintento ni zonas inventadas",
+                                    symbol, result["skipped"])
+                    else:
+                        failed = True
+                        log.warning("%s: recolección incompleta; no se inventan zonas o porcentajes N/D", symbol)
             else:
                 log.info("%s: ya hay seis zonas íntegras de hoy; sin duplicar", symbol)
             if scheduled:
@@ -339,6 +363,30 @@ def retry_scheduled_collection(attempt, log, *, now_fn=clock, sleep_fn=time_modu
     log.error("ALERTA_CORTE_PERDIDO: colector sin corte completo dentro de 11:00–11:20 NY; "
               "no se generan predicciones retrospectivas")
     return 1
+
+
+def retry_scheduled_resolution(attempt, log, *, now_fn=clock, sleep_fn=time_module.sleep,
+                               retry_seconds=60):
+    """Retry transient crashes (lock, MemoryError, network) inside 17:00–17:20 NY.
+
+    A normal non-zero return (provider without data, invalid signatures) is
+    not retried: repeating it would not change the outcome. Pending rows are
+    never lost; the next scheduled run resolves them from historical bars.
+    """
+    while True:
+        try:
+            return attempt()
+        except Exception:
+            log.exception("Resolución interrumpida por un fallo transitorio")
+        now = now_fn()
+        ny = now.astimezone(NY)
+        deadline = datetime.combine(ny.date(), time(17, 20), NY)
+        if (not allowed("resolve", now, scheduled=True)
+                or (deadline - ny).total_seconds() <= retry_seconds):
+            log.error("Resolución sin completar en la ventana; se reintentará en la próxima ejecución")
+            return 1
+        log.warning("Reintento de la resolución en %s segundos", retry_seconds)
+        sleep_fn(retry_seconds)
 
 
 def audit_recent_missing_cuts(repository, symbols, log, *, now=None, sessions=5):
@@ -492,6 +540,12 @@ def cli(job):
                 return collect(repository, symbols, state_dir, log, scheduled=args.scheduled)
         if job == "collect" and args.scheduled:
             return retry_scheduled_collection(attempt, log)
+        if job == "resolve" and args.scheduled:
+            def resolve_attempt():
+                with exclusive_job(Path(state_dir) / "jobs.lock"):
+                    return resolve(open_repository(database), symbols, log, now=clock(),
+                                   state_dir=state_dir)
+            return retry_scheduled_resolution(resolve_attempt, log)
         with exclusive_job(Path(state_dir) / "jobs.lock"):
             repository = open_repository(database)
             if job == "collect":

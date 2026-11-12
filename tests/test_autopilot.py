@@ -158,7 +158,7 @@ def test_collection_six_each_idempotent_and_no_ledger_writes(repo, tmp_path, mon
     before = repo.cash_balance_usd()
     monkeypatch.setattr(runtime, "fundamental_context", lambda *_: (None, ""))
     monkeypatch.setattr(MarketCache, "frames", lambda *_: (None, None))
-    monkeypatch.setattr(runtime, "analyze_headless", lambda r,s,*a: synthetic_analysis(s))
+    monkeypatch.setattr(runtime, "analyze_headless_with_evidence", lambda r,s,*a: (synthetic_analysis(s),)*2)
     monkeypatch.setattr(zones, "build_zone_snapshot", lambda _,now: synthetic_snapshot(now))
     code = runtime.collect(repo, ["SMCI","NVDA"], tmp_path, log, now_fn=lambda: UTC_TIME)
     assert code == 0
@@ -187,8 +187,8 @@ def test_scheduled_collector_keeps_crossed_tp_as_directional_only(repo, tmp_path
         result = synthetic_analysis(symbol)
         if symbol == "SMCI":
             result.execution_levels.take_profit_1 = 99.0
-        return result
-    monkeypatch.setattr(runtime, "analyze_headless", analysis)
+        return result, result
+    monkeypatch.setattr(runtime, "analyze_headless_with_evidence", analysis)
     monkeypatch.setattr(zones, "build_zone_snapshot", lambda _, now: synthetic_snapshot(now))
     with caplog.at_level(logging.INFO):
         assert runtime.collect(
@@ -210,7 +210,7 @@ def test_failure_one_symbol_continues_other(repo, tmp_path, monkeypatch):
         return None, ""
     monkeypatch.setattr(runtime, "fundamental_context", fundamental)
     monkeypatch.setattr(MarketCache, "frames", lambda *_: (None, None))
-    monkeypatch.setattr(runtime, "analyze_headless", lambda r,s,*a: synthetic_analysis(s))
+    monkeypatch.setattr(runtime, "analyze_headless_with_evidence", lambda r,s,*a: (synthetic_analysis(s),)*2)
     monkeypatch.setattr(zones, "build_zone_snapshot", lambda _,now: synthetic_snapshot(now))
     assert runtime.collect(repo, ["SMCI","NVDA"], tmp_path, logging.getLogger("test"), now_fn=lambda: UTC_TIME) == 1
     assert {r["symbol"] for r in repo.zone_predictions()} == {"NVDA"}
@@ -446,3 +446,92 @@ def test_incremental_after_long_shutdown_rebootstraps(tmp_path):
     cache._write(tmp_path/"SMCI/5m.json", old, pd.Timestamp("2026-01-02T16:00Z"), {})
     cache.frames("SMCI", UTC_TIME)
     assert requests[0] == {"interval": "5m", "period": "1mo"}
+
+
+def test_scheduled_resolution_retries_transient_crash_inside_window(caplog):
+    moments = iter(pd.Timestamp(value).to_pydatetime() for value in (
+        "2026-09-03T21:00:30Z",
+    ))
+    attempts = []
+    def attempt():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise MemoryError()
+        return 0
+    assert runtime.retry_scheduled_resolution(
+        attempt, logging.getLogger("resolve-retry"), now_fn=lambda: next(moments),
+        sleep_fn=lambda _: None,
+    ) == 0
+    assert len(attempts) == 2
+
+
+def test_scheduled_resolution_does_not_retry_a_normal_failure_or_after_window():
+    attempts = []
+    assert runtime.retry_scheduled_resolution(
+        lambda: attempts.append(1) or 1, logging.getLogger("resolve-retry"),
+        sleep_fn=lambda _: pytest.fail("no retry on normal return"),
+    ) == 1
+    late = pd.Timestamp("2026-09-03T21:19:30Z").to_pydatetime()
+    def crash():
+        raise MemoryError()
+    assert runtime.retry_scheduled_resolution(
+        crash, logging.getLogger("resolve-retry"), now_fn=lambda: late,
+        sleep_fn=lambda _: pytest.fail("late retry"),
+    ) == 1
+
+
+def test_zone_without_usable_level_is_not_a_retryable_failure(repo, tmp_path, monkeypatch, caplog):
+    """One deterministic N/D zone must not trigger 20 min of identical retries."""
+    import portfolio_tracker.services.price_zones as zones
+    def partial(_, now):
+        snapshot = synthetic_snapshot(now)
+        missing = ReachEstimate(None, 0, None, None, "test")
+        return ZoneSnapshot(now, snapshot.buys, snapshot.sales,
+                            (*snapshot.estimates[:5], missing))
+    monkeypatch.setattr(runtime, "fundamental_context", lambda *_: (None, ""))
+    monkeypatch.setattr(MarketCache, "frames", lambda *_: (None, None))
+    monkeypatch.setattr(runtime, "analyze_headless_with_evidence", lambda r, s, *a: (synthetic_analysis(s),)*2)
+    monkeypatch.setattr(zones, "build_zone_snapshot", partial)
+    assert runtime.collect(repo, ["NVDA"], tmp_path, logging.getLogger("test"),
+                           now_fn=lambda: UTC_TIME) == 0
+    assert len(repo.zone_predictions()) == 5
+    assert "resultado determinista" in caplog.text
+
+
+def test_collector_evidence_uses_pre_position_analysis(repo, tmp_path, monkeypatch):
+    """Holding shares must not swap the research plan for the frozen position plan."""
+    import portfolio_tracker.services.price_zones as zones
+    import portfolio_tracker.services.directional_collection as collection
+    position = synthetic_analysis("SMCI")
+    evidence = synthetic_analysis("SMCI")
+    received = {}
+    original = collection.record_fixed_directional
+    def spy(repository, analysis, *args, **kwargs):
+        received["analysis"] = analysis
+        return original(repository, analysis, *args, **kwargs)
+    zone_inputs = []
+    def zone(analysis, now):
+        zone_inputs.append(analysis)
+        return synthetic_snapshot(now)
+    monkeypatch.setattr(collection, "record_fixed_directional", spy)
+    monkeypatch.setattr(runtime, "fundamental_context", lambda *_: (None, ""))
+    monkeypatch.setattr(MarketCache, "frames", lambda *_: (None, None))
+    monkeypatch.setattr(runtime, "analyze_headless_with_evidence", lambda *a: (position, evidence))
+    monkeypatch.setattr(zones, "build_zone_snapshot", zone)
+    assert runtime.collect(repo, ["SMCI"], tmp_path, logging.getLogger("test"),
+                           now_fn=lambda: UTC_TIME) == 0
+    assert received["analysis"] is evidence
+    assert zone_inputs == [position]  # zones keep UI parity
+
+
+def test_headless_evidence_is_not_replaced_by_position_levels(repo, monkeypatch):
+    from tests.test_pdf_report import _analysis
+    from portfolio_tracker.analytics import technical_probability as technical
+    from portfolio_tracker.analytics import fundamental_news
+    raw = _analysis()
+    monkeypatch.setattr(technical, "analyze_probability", lambda *a, **k: raw)
+    monkeypatch.setattr(fundamental_news, "apply_fundamental_filter", lambda analysis, _: analysis)
+    position, evidence = runtime.analyze_headless_with_evidence(
+        repo, "SMCI", None, None, object(), "signed", UTC_TIME, logging.getLogger("test"))
+    assert evidence.execution_levels == raw.execution_levels
+    assert getattr(evidence, "position_state", None) == getattr(raw, "position_state", None)

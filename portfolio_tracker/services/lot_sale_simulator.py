@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from ..models import TradeSide, money
+from ..models import TradeSide, chronological_key, money
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +41,7 @@ class LotSaleSimulation:
 def open_buy_lots(trades: list[dict[str, Any]]) -> tuple[OpenBuyLot, ...]:
     """Reconstruye los lotes abiertos después de las ventas FIFO registradas."""
     lots: dict[str, deque[OpenBuyLot]] = defaultdict(deque)
-    for trade in sorted(trades, key=lambda row: (row["executed_at"], row["id"])):
+    for trade in sorted(trades, key=chronological_key):
         symbol = str(trade["symbol"]).upper()
         quantity = Decimal(str(trade["quantity"]))
         if quantity <= 0:

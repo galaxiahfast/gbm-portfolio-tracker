@@ -55,3 +55,20 @@ Configura el programador para impedir solapamientos de una misma tarea. No uses 
 El etiquetador espera el vencimiento XNYS más 15 minutos, recupera velas posteriores IEX y usa el etiquetador de triple barrera existente. Ante evidencia incompleta permanece `PENDING`; el último precio actual nunca sustituye una vela faltante. `mfe`/`mae` son excursiones OHLC desde la **entrada de referencia**, no P&L de un fill real. `fill_possible` significa solo alcance conservador por OHLC; se muestra separado de la autorización de producción y del fill confirmado por un corredor.
 
 El reporte separa snapshots, noticias, etiquetas, planes válidos, entradas autorizadas, fills posibles y días agrupados. La fecha estimada para 300 permanece `N/D` hasta contar al menos cinco sesiones observadas; aun después es una proyección, no promesa. Llegar a 300 snapshots no equivale a 300 eventos independientes ni a 300 entradas ejecutables.
+
+## Evaluación forward del piloto LONG 1D congelado
+
+`scripts/train_prospective_pilot.py forward` evalúa los modelos `RIDGE_TECH` y
+`RIDGE_TECH_NEWS` del último run V2 firmado **sin reentrenarlos**, sobre las
+sesiones posteriores al preregistro (`session_ny` mayor que la última sesión
+del protocolo y corte posterior al congelamiento). Reutiliza las medianas,
+medias y escalas del entrenamiento; las etiquetas que llegaron después del
+congelamiento no cuentan como entrenamiento. El resultado se firma en
+`output/prospective_research/long_1d_pilot_v2/forward_<UTC>.json`.
+
+Es la primera evidencia fuera de muestra real del piloto, pero con pocas
+sesiones sigue siendo informativa: no autoriza compras ni cambia el gatillo.
+
+```powershell
+.venv\Scripts\python.exe scripts\train_prospective_pilot.py forward
+```

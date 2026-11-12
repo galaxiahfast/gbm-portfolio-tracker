@@ -44,3 +44,31 @@ def test_group_weights_do_not_count_five_same_day_cuts_as_five_events():
     weights = pilot._group_weights(rows)
     assert np.isclose(weights[:5].sum(), 1)
     assert np.isclose(weights[5], 1)
+
+
+def test_frozen_model_scoring_matches_training_preprocessing():
+    """Forward evaluation must reuse train-time medians/means/scales, never refit."""
+    rng = np.random.default_rng(7)
+    rows = []
+    for i in range(12):
+        tech = [float(v) for v in rng.normal(size=len(pilot.TECH_FEATURES))]
+        news = [None if i % 4 == 0 else float(rng.normal()), float(rng.normal()),
+                float(i % 4 == 0)]
+        rows.append({"tech": tech, "news": news, "y": i % 2})
+    x, _, medians, means, scales = pilot._preprocess(rows, rows, True)
+    coeff = pilot._fit(x, np.asarray([r["y"] for r in rows]), np.ones(len(rows)))
+    model = {"features": list(pilot.TECH_FEATURES + pilot.NEWS_FEATURES),
+             "coefficients": coeff.tolist(), "medians": medians,
+             "means": means.tolist(), "scales": scales.tolist()}
+    assert np.allclose(pilot._apply_frozen(rows, model), pilot._predict(x, coeff))
+
+
+def test_frozen_model_rejects_feature_contract_change():
+    model = {"features": ["other"], "coefficients": [0.0, 0.0], "medians": [0.0],
+             "means": [0.0], "scales": [1.0]}
+    row = {"tech": [0.0] * len(pilot.TECH_FEATURES), "news": [0.0, 0.0, 0.0]}
+    try:
+        pilot._apply_frozen([row], model)
+    except ValueError:
+        return
+    raise AssertionError("A changed feature contract must be refused.")
